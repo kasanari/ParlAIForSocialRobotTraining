@@ -5,12 +5,12 @@
 # LICENSE file in the root directory of this source tree.
 
 from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel
-from parlai.agents.hugging_face.dict import Gpt2DictionaryAgent
+from parlai.agents.hugging_face.dict import Gpt2DictionaryAgent, DialogptDictionaryAgent
 from parlai.utils.misc import warn_once
 from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor
 
 try:
-    from transformers import GPT2Model
+    from transformers import GPT2Model, GPT2Config, GPT2LMHeadModel
 except ImportError:
     raise ImportError('Please run `pip install transformers`.')
 
@@ -20,6 +20,7 @@ import torch
 ## Modules
 ############################################
 
+global dialogpt
 
 class GPT2Decoder(torch.nn.Module):
     """
@@ -29,11 +30,28 @@ class GPT2Decoder(torch.nn.Module):
     """
 
     def __init__(self, opt, dict):
+        global dialogpt
         super().__init__()
         # load model
         model_sz = opt['gpt2_size']
-        fle_key = 'gpt2' if model_sz == 'small' else f'gpt2-{model_sz}'
-        self.transformer = GPT2Model.from_pretrained(fle_key)
+
+        if model_sz == 'medium':
+            fle_key = '345'
+        elif model_sz == 'large':
+            fle_key = '762'
+        else:
+            fle_key = '117'  # small
+
+        weights = torch.load(f'../{model_sz}_ft.pkl')
+        # fix misused key value
+        weights["lm_head.weight"] = weights["lm_head.decoder.weight"]
+        weights.pop("lm_head.decoder.weight", None)
+
+        cfg = GPT2Config.from_json_file(f'../parlai/agents/hugging_face/{fle_key}M/config.json')
+        dialogpt = GPT2LMHeadModel(cfg)
+        dialogpt.load_state_dict(weights)
+
+        self.transformer = dialogpt.transformer
         # add special tokens
         self.start_idx = dict.start_idx
         self.null_idx = dict.null_idx
@@ -98,9 +116,9 @@ class HFGPT2Model(TorchGeneratorModel):
         self.encoder = IdentityLayer()
         self.decoder = GPT2Decoder(opt, dict)
         self.config = self.decoder.transformer.config
-        self.lm_head = torch.nn.Linear(
-            self.config.n_embd, self.config.vocab_size, bias=False
-        )
+
+        global dialogpt
+        self.lm_head = dialogpt.lm_head
         self._tie_weights(self.lm_head, self.decoder.transformer.wte)
         # add start token
         self.add_start_token = opt['add_special_tokens'] and opt['add_start_token']
@@ -182,7 +200,7 @@ class HFGPT2Model(TorchGeneratorModel):
 ############################################
 
 
-class Gpt2Agent(TorchGeneratorAgent):
+class DialogptAgent(TorchGeneratorAgent):
     """
     Hugging Face GPT2 Agent.
 
@@ -207,7 +225,7 @@ class Gpt2Agent(TorchGeneratorAgent):
             '--gpt2-size',
             type=str,
             default='small',
-            choices=['small', 'medium', 'large', 'xl'],
+            choices=['small', 'medium', 'large'],
             help='Which size model to initialize.',
         )
         agent.add_argument(
@@ -228,7 +246,7 @@ class Gpt2Agent(TorchGeneratorAgent):
             label_truncate=256,
             dict_maxexs=0,  # skip building dictionary
         )
-        super(Gpt2Agent, cls).add_cmdline_args(argparser)
+        super(DialogptAgent, cls).add_cmdline_args(argparser)
         warn_once('WARNING: this model is in beta and the API is subject to change.')
         return agent
 
@@ -246,7 +264,7 @@ class Gpt2Agent(TorchGeneratorAgent):
 
         Can be overriden if a more complex dictionary is required.
         """
-        return Gpt2DictionaryAgent
+        return DialogptDictionaryAgent
 
     def build_model(self, states=None):
         """

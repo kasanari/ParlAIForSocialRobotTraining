@@ -100,3 +100,11 @@ class Gpt2DictionaryAgent(HuggingFaceDictionaryAgent):
         self.ind2tok[self.end_idx] = self.end_token
         self.ind2tok[self.start_idx] = self.start_token
         self.ind2tok[self.null_idx] = self.null_token
+
+class DialogptDictionaryAgent(Gpt2DictionaryAgent):
+    def get_tokenizer(self, opt):
+        """
+        Instantiate tokenizer.
+        """
+        return GPT2Tokenizer.from_pretrained(f'../parlai/agents/hugging_face/117M/vocab.json',
+                                             f'../parlai/agents/hugging_face/117M/merges.txt')
