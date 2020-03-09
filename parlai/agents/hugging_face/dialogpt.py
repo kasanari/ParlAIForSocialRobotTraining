@@ -42,12 +42,12 @@ class GPT2Decoder(torch.nn.Module):
         else:
             fle_key = '117'  # small
 
-        weights = torch.load(f'../{model_sz}_ft.pkl')
+        weights = torch.load(f'parlai/agents/hugging_face/dialogpt/{fle_key}M/{model_sz}_ft.pkl')
         # fix misused key value
         weights["lm_head.weight"] = weights["lm_head.decoder.weight"]
         weights.pop("lm_head.decoder.weight", None)
 
-        cfg = GPT2Config.from_json_file(f'../parlai/agents/hugging_face/{fle_key}M/config.json')
+        cfg = GPT2Config.from_json_file(f'parlai/agents/hugging_face/dialogpt/{fle_key}M/config.json')
         dialogpt = GPT2LMHeadModel(cfg)
         dialogpt.load_state_dict(weights)
 

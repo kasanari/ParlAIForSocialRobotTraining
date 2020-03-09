@@ -106,5 +106,4 @@ class DialogptDictionaryAgent(Gpt2DictionaryAgent):
         """
         Instantiate tokenizer.
         """
-        return GPT2Tokenizer.from_pretrained(f'../parlai/agents/hugging_face/117M/vocab.json',
-                                             f'../parlai/agents/hugging_face/117M/merges.txt')
+        return GPT2Tokenizer(f'parlai/agents/hugging_face/dialogpt/117M/vocab.json', f'parlai/agents/hugging_face/dialogpt/117M/merges.txt')
