@@ -103,7 +103,9 @@ class Gpt2DictionaryAgent(HuggingFaceDictionaryAgent):
 
 class DialogptDictionaryAgent(Gpt2DictionaryAgent):
     def get_tokenizer(self, opt):
-        """
-        Instantiate tokenizer.
-        """
         return GPT2Tokenizer(f'parlai/agents/hugging_face/dialogpt/117M/vocab.json', f'parlai/agents/hugging_face/dialogpt/117M/merges.txt')
+
+    def _define_special_tokens(self, opt):
+        self.start_token = NO_OP  # hack, we cut off the start token
+        self.end_token = "<|endoftext|>"
+        self.null_token = "<|endoftext|>"
