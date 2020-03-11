@@ -1,9 +1,13 @@
-from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel
+from parlai.core.torch_agent import TorchAgent, Batch, Output
+from parlai.core.opt import Opt
 from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
-from transformers import GPT2Config, GPT2LMHeadModel
 from parlai.utils.torch import IdentityLayer, concat_without_padding
 
 import torch
+import torch.nn.functional as F
+
+from transformers import GPT2Config, GPT2LMHeadModel
+
 
 
 def load_model(fle_key: str, model_sz: str) -> GPT2LMHeadModel:
@@ -18,88 +22,15 @@ def load_model(fle_key: str, model_sz: str) -> GPT2LMHeadModel:
 
     model = GPT2LMHeadModel(cfg)
     model.load_state_dict(weights)
-
+    model.to('cuda')
     return model
 
+class DialoggerAgent(TorchAgent):
 
-class HFGPT2Wrapper(torch.nn.Module):
+    def __init__(self, opt : Opt):
+        super().__init__(opt)
 
-    def __init__(self, transformer, dictionary):
-        super().__init__()
-
-        self.transformer = transformer
-
-        self.dict = dictionary
-
-        # use cuda
-        self.use_cuda = torch.cuda.is_available()
-
-    def forward(self, decoder_input, encoder_states, incr_state=None):
-
-        attention_mask = None
-            # concatenate the context and the generated tokens
-        model_input, _ = concat_without_padding(
-                encoder_states,
-                decoder_input,
-                use_cuda=self.use_cuda,
-                # null_idx=self.null_idx,
-            )
-            # attention_mask = model_input != self.null_idx
-
-        transformer_outputs = self.transformer(
-            model_input, past=incr_state, attention_mask=attention_mask)
-        hidden_states = transformer_outputs[0]
-        new_incr_state = transformer_outputs[1]
-
-        return hidden_states, new_incr_state
-
-
-class DialoggerModel(TorchGeneratorModel):
-
-    def __init__(self, opt: dict, dictionary: DialogptDictionaryAgent):
-        super().__init__(start_idx=dictionary.start_idx, end_idx=dictionary.end_idx)
-        # load model
-        model_sz = opt['gpt2_size']
-
-        if model_sz == 'medium':
-            fle_key = '345'
-        elif model_sz == 'large':
-            fle_key = '762'
-        else:
-            fle_key = '117'  # small
-
-        dialogpt = load_model(fle_key, model_sz)
-
-        # init the model
-        self.encoder = IdentityLayer()  # Decoder-only model, so encoder is identity layer
-        self.decoder = HFGPT2Wrapper(dialogpt.transformer, dictionary)
-        self.config = dialogpt.config
-        self.lm_head = dialogpt.lm_head
-
-        self._tie_weights(self.lm_head, self.decoder.transformer.wte)
-
-    def output(self, decoder_output):
-        return self.lm_head(decoder_output)
-
-    def _tie_weights(self, output_embeddings, input_embeddings):
-        """
-        Make sure the input and output word embeddings share the same weights
-        """
-        output_embeddings.weight.data=input_embeddings.weight.data
-
-    def reorder_encoder_states(self, encoder_states, indices):
-        enc=torch.index_select(encoder_states, 0, indices)
-        return enc
-
-    def reorder_decoder_incremental_state(self, incremental_state, inds):
-        new_incr_state=[]
-        for layer_past in incremental_state:
-            new_incr_state.append(torch.index_select(layer_past, 1, inds))
-
-        return tuple(new_incr_state)
-
-
-class DialoggerAgent(TorchGeneratorAgent):
+        self.model = self.build_model()
 
     @classmethod
     def add_cmdline_args(cls, argparser):
@@ -114,27 +45,86 @@ class DialoggerAgent(TorchGeneratorAgent):
         super(DialoggerAgent, cls).add_cmdline_args(argparser)
         return agent
 
-    def build_model(self):
-        return DialoggerModel(self.opt, self.dict)
+    def build_model(self) -> GPT2LMHeadModel:
+        model_sz = self.opt['gpt2_size']
 
-    def _encoder_input(self, batch):
-        return (batch.text_vec,)
+        if model_sz == 'medium':
+            fle_key = '345'
+        elif model_sz == 'large':
+            fle_key = '762'
+        else:
+            fle_key = '117'  # default to small
+
+        return load_model(fle_key, model_sz) 
 
     @staticmethod
     def dictionary_class():
         return DialogptDictionaryAgent
 
-    def _set_text_vec(self, *args, **kwargs):
-        """
-        Add the start and end token to the text.
-        """
-        obs=super()._set_text_vec(*args, **kwargs)
+    def generate(self, batch_size, context) -> torch.Tensor:
 
-        # if 'text_vec' in obs:
-        #     obs.force_set(
-        #         'text_vec', self._add_start_end_tokens(
-        #             obs['text_vec'], True, True)
-        #     )
-        #     obs['added_start_end'] = True
+        attention_mask = None
+        generated_tokens = torch.LongTensor([self.START_IDX]).expand(batch_size, 1).to("cuda")
+        past = None
 
-        return obs
+        while True:
+            # concatenate the context and the generated tokens
+            model_input = torch.cat([context, generated_tokens], dim=-1)
+
+            predictions, past = self.model(context, past=past, attention_mask=attention_mask) # get predictions and incremental state from language model
+            logits = predictions[0, -1, :]
+            filtered_logits = top_p_filtering(logits) # filter logits with top p filtering
+            probabilities = F.softmax(filtered_logits, dim=-1) # normalize
+            next_token = torch.multinomial(probabilities, 1) # sample from distribution
+            next_token = torch.unsqueeze(next_token, -1)
+            generated_tokens = torch.cat([generated_tokens, next_token], dim=-1) # add sampled token to list of generated tokens
+
+            if next_token.item() == self.END_IDX:
+                return generated_tokens
+
+
+    def train_step(self, batch : Batch) -> float:
+
+        outputs = self.model(batch.text_vec, labels=batch.labels)
+        loss, logits = outputs[:2]
+
+        return loss
+
+
+    def eval_step(self, batch: Batch) -> Output:
+
+        if batch.text_vec is not None:
+            bsz = batch.text_vec.size(0)
+
+        tokens = self.generate(bsz, batch.text_vec)
+
+        text = [self._v2t(t) for t in tokens]
+
+        return Output(text)
+
+    def _v2t(self, vec):
+        """
+        Convert token indices to string of tokens.
+        """
+        new_vec = []
+        if hasattr(vec, 'cpu'):
+            vec = vec.cpu()
+        for i in vec:
+            new_vec.append(i)
+        return self.dict.vec2txt(new_vec)
+
+def top_p_filtering(logits : list, top_p : float = 0.9, filter_value : float =-float('Inf')):
+  """
+  Credit: https://gist.github.com/thomwolf/1a5a29f6962089e871b94cbd09daf317
+  """
+  assert logits.dim() == 1  # batch size 1 for single word generation
+  sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+  cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+  # remove tokens with cumulative probability above the threshold
+  sorted_indices_to_remove = cumulative_probs > top_p
+  # shift the indices to the right to keep also the first token above the threshold
+  sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+  sorted_indices_to_remove[..., 0] = 0
+  indices_to_remove = sorted_indices[sorted_indices_to_remove]
+  logits[indices_to_remove] = filter_value
+  return logits
