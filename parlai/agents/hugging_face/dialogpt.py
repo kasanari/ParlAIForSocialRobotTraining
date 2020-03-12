@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel
-from parlai.agents.hugging_face.dict import Gpt2DictionaryAgent, DialogptDictionaryAgent
+from parlai.agents.hugging_face.dict import DialogptDictionaryAgent 
 from parlai.utils.misc import warn_once
 from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor
 
@@ -20,7 +20,23 @@ import torch
 ## Modules
 ############################################
 
-global dialogpt
+def load_model(fle_key: str, model_sz: str) -> GPT2LMHeadModel:
+
+    # model = AutoModel.from_pretrained(f"microsoft/DialoGPT-{model_sz}")
+
+    weights = torch.load(
+        f'parlai/agents/hugging_face/dialogpt/{fle_key}M/{model_sz}_ft.pkl')
+    cfg = GPT2Config.from_json_file(
+        f'parlai/agents/hugging_face/dialogpt/{fle_key}M/config.json')
+
+    #fix misused key value
+    weights["lm_head.weight"] = weights["lm_head.decoder.weight"]
+    weights.pop("lm_head.decoder.weight", None)
+
+    model = GPT2LMHeadModel(cfg)
+
+    model.load_state_dict(weights)
+    return model
 
 class GPT2Decoder(torch.nn.Module):
     """
@@ -29,29 +45,11 @@ class GPT2Decoder(torch.nn.Module):
     This decoder is initialized with the pretrained model from Hugging Face.
     """
 
-    def __init__(self, opt, dict):
-        global dialogpt
+    def __init__(self, opt, dict, transformer):
         super().__init__()
-        # load model
-        model_sz = opt['gpt2_size']
 
-        if model_sz == 'medium':
-            fle_key = '345'
-        elif model_sz == 'large':
-            fle_key = '762'
-        else:
-            fle_key = '117'  # small
+        self.transformer = transformer
 
-        weights = torch.load(f'parlai/agents/hugging_face/dialogpt/{fle_key}M/{model_sz}_ft.pkl')
-        # fix misused key value
-        weights["lm_head.weight"] = weights["lm_head.decoder.weight"]
-        weights.pop("lm_head.decoder.weight", None)
-
-        cfg = GPT2Config.from_json_file(f'parlai/agents/hugging_face/dialogpt/{fle_key}M/config.json')
-        dialogpt = GPT2LMHeadModel(cfg)
-        dialogpt.load_state_dict(weights)
-
-        self.transformer = dialogpt.transformer
         # add special tokens
         self.start_idx = dict.start_idx
         self.null_idx = dict.null_idx
@@ -112,13 +110,23 @@ class HFGPT2Model(TorchGeneratorModel):
         )
         super().__init__(self.null_idx, self.start_idx, self.end_idx)
 
+        model_sz = opt['gpt2_size']
+
+        if model_sz == 'medium':
+            fle_key = '345'
+        elif model_sz == 'large':
+            fle_key = '762'
+        else:
+            fle_key = '117'  # default to small
+
+        model = load_model(fle_key, model_sz)
+
         # init the model
         self.encoder = IdentityLayer()
-        self.decoder = GPT2Decoder(opt, dict)
-        self.config = self.decoder.transformer.config
+        self.decoder = GPT2Decoder(opt, dict, model.transformer)
+        self.config = model.config
 
-        global dialogpt
-        self.lm_head = dialogpt.lm_head
+        self.lm_head = model.lm_head
         self._tie_weights(self.lm_head, self.decoder.transformer.wte)
         # add start token
         self.add_start_token = opt['add_special_tokens'] and opt['add_start_token']
