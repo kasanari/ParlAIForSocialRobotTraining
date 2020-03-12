@@ -108,6 +108,6 @@ class DialogptDictionaryAgent(Gpt2DictionaryAgent):
         return AutoTokenizer.from_pretrained(f"microsoft/DialoGPT-{model_size}")
 
     def _define_special_tokens(self, opt):
-        self.start_token = "<|endoftext|>" 
+        self.start_token = NO_OP 
         self.end_token = "<|endoftext|>"
         self.null_token = "<|endoftext|>"
