@@ -6,7 +6,7 @@
 from parlai.core.dict import DictionaryAgent
 
 try:
-    from transformers import GPT2Tokenizer
+    from transformers import GPT2Tokenizer, AutoTokenizer
 except ImportError:
     raise ImportError(
         'Need to install Hugging Face transformers repository. '
@@ -103,7 +103,9 @@ class Gpt2DictionaryAgent(HuggingFaceDictionaryAgent):
 
 class DialogptDictionaryAgent(Gpt2DictionaryAgent):
     def get_tokenizer(self, opt):
-        return GPT2Tokenizer(f'parlai/agents/hugging_face/dialogpt/117M/vocab.json', f'parlai/agents/hugging_face/dialogpt/117M/merges.txt')
+        #return GPT2Tokenizer(f'parlai/agents/hugging_face/dialogpt/117M/vocab.json', f'parlai/agents/hugging_face/dialogpt/117M/merges.txt')
+        model_size = opt['gpt2_size']
+        return AutoTokenizer.from_pretrained(f"microsoft/DialoGPT-{model_size}")
 
     def _define_special_tokens(self, opt):
         self.start_token = "<|endoftext|>" 

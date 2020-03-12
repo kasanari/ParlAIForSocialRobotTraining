@@ -1,36 +1,56 @@
-from parlai.core.torch_agent import TorchAgent, Batch, Output
+from parlai.core.torch_agent import TorchAgent, Batch, Output, History
 from parlai.core.opt import Opt
 from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
 from parlai.utils.torch import IdentityLayer, concat_without_padding
 
 import torch
 import torch.nn.functional as F
+from torch import Tensor
 
-from transformers import GPT2Config, GPT2LMHeadModel
+from transformers import GPT2Config, GPT2LMHeadModel, AutoModel
 
-
+from collections import deque
 
 def load_model(fle_key: str, model_sz: str) -> GPT2LMHeadModel:
+
+    # model = AutoModel.from_pretrained(f"microsoft/DialoGPT-{model_sz}")
+
     weights = torch.load(
         f'parlai/agents/hugging_face/dialogpt/{fle_key}M/{model_sz}_ft.pkl')
     cfg = GPT2Config.from_json_file(
         f'parlai/agents/hugging_face/dialogpt/{fle_key}M/config.json')
 
-    # fix misused key value
+    #fix misused key value
     weights["lm_head.weight"] = weights["lm_head.decoder.weight"]
     weights.pop("lm_head.decoder.weight", None)
 
     model = GPT2LMHeadModel(cfg)
+
     model.load_state_dict(weights)
     model.to('cuda')
     return model
+
+class DialoggerHistory(History):
+    """
+    Handles tokenization history.
+    """
+
+    def get_history_vec(self):
+
+        history = deque(maxlen=self.max_len)
+        for vec in self.history_vecs:
+            history.extend(vec)
+            history.extend([self.dict.end_idx])
+
+        return history
 
 class DialoggerAgent(TorchAgent):
 
     def __init__(self, opt : Opt):
         super().__init__(opt)
 
-        self.model = self.build_model()
+        self.model : GPT2LMHeadModel = self.build_model()
+        self.dict : DialogptDictionaryAgent = self.build_dictionary()
 
     @classmethod
     def add_cmdline_args(cls, argparser):
@@ -44,6 +64,11 @@ class DialoggerAgent(TorchAgent):
         )
         super(DialoggerAgent, cls).add_cmdline_args(argparser)
         return agent
+
+    def vectorize(self, *args, **kwargs):
+        kwargs['add_start'] = True
+        kwargs['add_end'] = True
+        return super().vectorize(*args, **kwargs)
 
     def build_model(self) -> GPT2LMHeadModel:
         model_sz = self.opt['gpt2_size']
@@ -61,26 +86,34 @@ class DialoggerAgent(TorchAgent):
     def dictionary_class():
         return DialogptDictionaryAgent
 
-    def generate(self, batch_size, context) -> torch.Tensor:
+    @staticmethod
+    def history_class():
+        return DialoggerHistory
 
-        attention_mask = None
-        generated_tokens = torch.LongTensor([self.START_IDX]).expand(batch_size, 1).to("cuda")
-        past = None
+    def generate(self, batch_size, context) -> Tensor:
+
+        predictions : Tensor
+        past : Tensor
+        response : Tensor = torch.tensor([[]], dtype=torch.long, device="cuda")
+        next_token = context[:, -1:] # Start decoding with eos token
+
+        _, past = self.model(context[:, :-1]) # Feed context to model and calculate embedding
 
         while True:
-            # concatenate the context and the generated tokens
-            model_input = torch.cat([context, generated_tokens], dim=-1)
 
-            predictions, past = self.model(context, past=past, attention_mask=attention_mask) # get predictions and incremental state from language model
-            logits = predictions[0, -1, :]
+            predictions, past = self.model(next_token, past=past) # get predictions and incremental state from language model
+      
+            logits = predictions[0, -1, :].float()
+
             filtered_logits = top_p_filtering(logits) # filter logits with top p filtering
             probabilities = F.softmax(filtered_logits, dim=-1) # normalize
             next_token = torch.multinomial(probabilities, 1) # sample from distribution
             next_token = torch.unsqueeze(next_token, -1)
-            generated_tokens = torch.cat([generated_tokens, next_token], dim=-1) # add sampled token to list of generated tokens
+
+            response = torch.cat([response, next_token], dim=-1) # add sampled token to list of generated tokens
 
             if next_token.item() == self.END_IDX:
-                return generated_tokens
+                return response[:, :-1]
 
 
     def train_step(self, batch : Batch) -> float:
@@ -92,6 +125,8 @@ class DialoggerAgent(TorchAgent):
 
 
     def eval_step(self, batch: Batch) -> Output:
+        
+        self.model.eval()
 
         if batch.text_vec is not None:
             bsz = batch.text_vec.size(0)
