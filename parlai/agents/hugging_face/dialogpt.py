@@ -5,8 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 
 from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel
-from parlai.agents.hugging_face.dict import DialogptDictionaryAgent 
-from parlai.agents.hugging_face.dialogger import DialoggerHistory 
+from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
+from parlai.agents.hugging_face.dialogger import DialoggerHistory
 from parlai.utils.misc import warn_once
 from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor
 
@@ -18,8 +18,9 @@ except ImportError:
 import torch
 
 ############################################
-## Modules
+# Modules
 ############################################
+
 
 class GPT2Decoder(torch.nn.Module):
     """
@@ -32,7 +33,8 @@ class GPT2Decoder(torch.nn.Module):
         super().__init__()
         # load model
         model_sz = opt['gpt2_size']
-        self.transformer = AutoModel.from_pretrained(f"microsoft/DialoGPT-{model_sz}")
+        self.transformer = AutoModel.from_pretrained(
+            f"microsoft/DialoGPT-{model_sz}")
         # add special tokens
         self.start_idx = dict.start_idx
         self.null_idx = dict.null_idx
@@ -138,7 +140,7 @@ class HFGPT2Model(TorchGeneratorModel):
                     if not self.add_start_token:
                         start = start - 1
                     end = start + to_select
-                    new_tensors.append(tensor[i : i + 1, start:end, :])
+                    new_tensors.append(tensor[i: i + 1, start:end, :])
                 tensor = torch.cat(new_tensors, 0)
 
         return self.lm_head(tensor)
@@ -176,7 +178,7 @@ class HFGPT2Model(TorchGeneratorModel):
 
 
 ############################################
-## Agent
+# Agent
 ############################################
 
 
