@@ -43,8 +43,7 @@ class GPT2Decoder(torch.nn.Module):
         # use cuda
         self.use_cuda = not opt['no_cuda'] and torch.cuda.is_available()
 
-    def forward(self, input, encoder_state, incr_state=None):
-        attention_mask = None
+    def forward(self, input, encoder_states, incr_state=None):
         if incr_state is None:
             # first step
             if (
@@ -53,21 +52,21 @@ class GPT2Decoder(torch.nn.Module):
                 and int(input[0][0]) == self.start_idx
             ):
                 # generating: ignore the start token
-                model_input = encoder_state
+                model_input = encoder_states
             else:
                 # forced decoding: concatenate the context
                 # with the labels
                 model_input, _ = concat_without_padding(
-                    encoder_state,
+                    encoder_states,
                     input,
                     use_cuda=self.use_cuda,
                     null_idx=self.null_idx,
                 )
-                attention_mask = model_input != self.null_idx
         else:
             # generation: get the last token input
             model_input = input[:, -1].unsqueeze(1)
 
+        attention_mask = model_input != self.null_idx
         transformer_outputs = self.transformer(
             model_input, past=incr_state, attention_mask=attention_mask
         )
