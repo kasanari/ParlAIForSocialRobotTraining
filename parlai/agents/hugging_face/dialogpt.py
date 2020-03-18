@@ -308,3 +308,17 @@ class DialogptAgent(TorchGeneratorAgent):
             return (loss, model_output)
         else:
             return loss
+            
+    def _v2t(self, vec, ignore_end_idx=False):
+        """
+        Convert token indices to string of tokens.
+        """
+        new_vec = []
+        if hasattr(vec, 'cpu'):
+            vec = vec.cpu()
+        for i in vec:
+            if i == self.END_IDX and not ignore_end_idx:
+                break
+            elif i != self.START_IDX:
+                new_vec.append(i)
+        return self.dict.vec2txt(new_vec)
