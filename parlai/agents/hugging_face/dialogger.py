@@ -37,8 +37,13 @@ class DialoggerHistory(History):
 
     def get_history_vec(self):
 
+        if len(self.history_vecs) < 5: # Limit history to two turns 
+            turns = self.history_vecs
+        else:
+            turns = self.history_vecs[-5:]
+
         history = deque(maxlen=self.max_len)
-        for vec in self.history_vecs:
+        for vec in turns:
             history.extend(vec)
             history.extend([self.dict.end_idx])
 
