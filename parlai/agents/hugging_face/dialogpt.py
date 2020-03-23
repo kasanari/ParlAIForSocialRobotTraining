@@ -4,18 +4,51 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel
+from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel, PPLMetric
 from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
 from parlai.agents.hugging_face.dialogger import DialoggerHistory
-from parlai.utils.misc import warn_once
+from parlai.utils.misc import warn_once, AttrDict
 from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor
+from parlai.core.metrics import SumMetric, AverageMetric, BleuMetric, FairseqBleuMetric
 
 try:
     from transformers import GPT2Model, GPT2Config, GPT2LMHeadModel, AutoModel
 except ImportError:
     raise ImportError('Please run `pip install transformers`.')
 
+from transformers.modeling_utils import SequenceSummary
+
 import torch
+
+
+class Batch(AttrDict):
+    def __init__(
+        self,
+        text_vec=None,
+        text_lengths=None,
+        label_vec=None,
+        label_lengths=None,
+        labels=None,
+        valid_indices=None,
+        candidates=None,
+        candidate_vecs=None,
+        image=None,
+        observations=None,
+        ** kwargs,
+    ):
+        super().__init__(
+            text_vec=text_vec,
+            text_lengths=text_lengths,
+            label_vec=label_vec,
+            label_lengths=label_lengths,
+            labels=labels,
+            valid_indices=valid_indices,
+            candidates=candidates,
+            candidate_vecs=candidate_vecs,
+            image=image,
+            observations=observations,
+            **kwargs,
+        )
 
 ############################################
 # Modules
@@ -49,9 +82,9 @@ class GPT2Decoder(torch.nn.Module):
         if incr_state is None:
             # first step
             if (
-                not self.add_start_token
-                and input.size(1) == 1
-                and int(input[0][0]) == self.start_idx
+                not self.add_start_token and
+                input.size(1) == 1 and
+                int(input[0][0]) == self.start_idx
             ):
                 # generating: ignore the start token
                 model_input = encoder_states
@@ -69,6 +102,9 @@ class GPT2Decoder(torch.nn.Module):
             model_input = input[:, -1].unsqueeze(1)
 
         attention_mask = model_input != self.null_idx
+
+        #position_ids = torch.LongTensor(list(range(model_input.size(1)))).repeat(model_input.size(0), 1).to("cuda")
+
         transformer_outputs = self.transformer(
             model_input, past=incr_state, attention_mask=attention_mask
         )
@@ -101,6 +137,10 @@ class HFGPT2Model(TorchGeneratorModel):
         self.lm_head = torch.nn.Linear(
             self.config.n_embd, self.config.vocab_size, bias=False
         )
+
+        if opt["next_sentence_prediction"]:
+            self.mc_head = SequenceSummary(self.config)  # Multiple choice head
+
         self._tie_weights(self.lm_head, self.decoder.transformer.wte)
         # add start token
         self.add_start_token = opt['add_special_tokens'] and opt['add_start_token']
@@ -223,6 +263,12 @@ class DialogptAgent(TorchGeneratorAgent):
             default=False,
             help='Add start tokens when finetuning.',
         )
+        agent.add_argument(
+            '--next-sentence-prediction',
+            type='bool',
+            default=False,
+            help='Add next sentence prediction training objective.',
+        )
         argparser.set_defaults(
             text_truncate=768,
             label_truncate=256,
@@ -287,7 +333,7 @@ class DialogptAgent(TorchGeneratorAgent):
         if batch.label_vec is None:
             raise ValueError('Cannot compute loss without a label.')
         model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
-        scores, preds, *_ = model_output
+        scores, preds, encoder_state = model_output
         score_view = scores.view(-1, scores.size(-1))
         loss = self.criterion(score_view, batch.label_vec.view(-1))
         loss = loss.view(scores.shape[:-1]).sum(dim=1)
@@ -296,7 +342,20 @@ class DialogptAgent(TorchGeneratorAgent):
         target_tokens = notnull.long().sum(dim=-1)
         correct = ((batch.label_vec == preds) * notnull).sum(dim=-1)
 
-        self.record_local_metric('loss', AverageMetric.many(loss, target_tokens))
+        if hasattr(self, 'mc_head'):
+            hidden_states, _ = self.model.decoder.transformer(
+                input_ids=encoder_state)
+
+            mc_logits = self.model.mc_head(
+                hidden_states, batch.mc_token_ids).squeeze(-1)
+
+            if batch.label_vec is not None:
+                mc_loss_fct = CrossEntropyLoss()
+                mc_loss = loss_fct(
+                    mc_logits.view(-1, mc_logits.size(-1)), batch.label_vec.view(-1))
+
+        self.record_local_metric(
+            'loss', AverageMetric.many(loss, target_tokens))
         self.record_local_metric('ppl', PPLMetric.many(loss, target_tokens))
         self.record_local_metric(
             'token_acc', AverageMetric.many(correct, target_tokens)
@@ -308,7 +367,7 @@ class DialogptAgent(TorchGeneratorAgent):
             return (loss, model_output)
         else:
             return loss
-            
+
     def _v2t(self, vec, ignore_end_idx=False):
         """
         Convert token indices to string of tokens.
@@ -322,3 +381,14 @@ class DialogptAgent(TorchGeneratorAgent):
             elif i != self.START_IDX:
                 new_vec.append(i)
         return self.dict.vec2txt(new_vec)
+
+    # def batchify(self, obs_batch, sort=False):
+
+    def vectorize(self, *args, **kwargs):
+
+        obs = super().vectorize(*args, **kwargs)
+
+        distractor = obs["distractor_label"]
+        obs["distractor_vec"] = self._vectorize_text(distractor[0], add_start=False, add_end=True, truncate=kwargs["label_truncate"], truncate_left=False)
+
+        return obs
