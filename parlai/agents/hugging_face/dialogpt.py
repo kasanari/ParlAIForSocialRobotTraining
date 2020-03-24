@@ -139,6 +139,7 @@ class HFGPT2Model(TorchGeneratorModel):
         )
 
         if opt["next_sentence_prediction"]:
+            self.config.num_labels = 1
             self.mc_head = SequenceSummary(self.config)  # Multiple choice head
 
         self._tie_weights(self.lm_head, self.decoder.transformer.wte)
