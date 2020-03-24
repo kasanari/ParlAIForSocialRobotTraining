@@ -135,7 +135,10 @@ heroku-cli-*
 *.iml
 
 # VSCode
-*.vscode
 
 # mypy cache
 .mypy_cache
+
+.pyre
+
+models
