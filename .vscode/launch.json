@@ -4,6 +4,7 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+        
         {
             "name": "Interactive dialogger",
             "type": "python",
@@ -77,6 +78,8 @@
                 "True",
                 "--add-start-token",
                 "False",
+                "--next-sentence-prediction",
+                "True",
                 "--gpt2-size",
                 "medium",
                 "-t",
@@ -84,11 +87,11 @@
                 "-tblog",
                 "True",
                 "-bs",
-                "2",
+                "1",
                 "-vtim",
-                "10",
+                "3600",
                 "-mf",
-                "models/dialogpt-ED/dialogpt-ED2",
+                "models/dialogpt-mc/dialogpt-mc",
                 "--inference",
                 "beam",
                 "--beam-size",

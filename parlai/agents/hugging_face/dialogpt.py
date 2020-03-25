@@ -4,12 +4,15 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel, PPLMetric
+from parlai.core.torch_agent import Output
 from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
 from parlai.agents.hugging_face.dialogger import DialoggerHistory
 from parlai.utils.misc import warn_once, AttrDict
-from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor
+from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor, padded_3d
 from parlai.core.metrics import SumMetric, AverageMetric, BleuMetric, FairseqBleuMetric
+from torch.nn import CrossEntropyLoss
 
 try:
     from transformers import GPT2Model, GPT2Config, GPT2LMHeadModel, AutoModel
@@ -34,6 +37,9 @@ class Batch(AttrDict):
         candidate_vecs=None,
         image=None,
         observations=None,
+        distractor_vec=None,
+        distractors=None,
+        distractor_lengths=None,
         ** kwargs,
     ):
         super().__init__(
@@ -47,6 +53,9 @@ class Batch(AttrDict):
             candidate_vecs=candidate_vecs,
             image=image,
             observations=observations,
+            distractor_vec=distractor_vec,
+            distractors=distractors,
+            distractor_lengths=distractor_lengths,
             **kwargs,
         )
 
@@ -82,9 +91,9 @@ class GPT2Decoder(torch.nn.Module):
         if incr_state is None:
             # first step
             if (
-                not self.add_start_token and
-                input.size(1) == 1 and
-                int(input[0][0]) == self.start_idx
+                not self.add_start_token
+                and input.size(1) == 1
+                and int(input[0][0]) == self.start_idx
             ):
                 # generating: ignore the start token
                 model_input = encoder_states
@@ -284,8 +293,10 @@ class DialogptAgent(TorchGeneratorAgent):
             raise RuntimeError(
                 'If using batchsize > 1, --add-special-tokens must be True.'
             )
+        if opt["next_sentence_prediction"] and opt['batchsize'] > 1:
+                raise RuntimeError("Next sentence prediction is not implemented for batchsize > 1")
         super().__init__(opt, shared)
-
+   
     @staticmethod
     def dictionary_class():
         """
@@ -336,36 +347,75 @@ class DialogptAgent(TorchGeneratorAgent):
         model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
         scores, preds, encoder_state = model_output
         score_view = scores.view(-1, scores.size(-1))
-        loss = self.criterion(score_view, batch.label_vec.view(-1))
-        loss = loss.view(scores.shape[:-1]).sum(dim=1)
+        lm_loss = self.criterion(score_view, batch.label_vec.view(-1))
+        lm_loss = lm_loss.view(scores.shape[:-1]).sum(dim=1)
+
+        mc_loss = None
+
+        bsz = batch.text_vec.shape[0]
+        if hasattr(self.model, 'mc_head'):
+            context = batch.text_vec
+
+            if batch.candidate_vecs is not None:
+                choices = padded_3d(batch.candidate_vecs,
+                                    use_cuda=True, pad_idx=self.NULL_IDX)
+
+                model_input = encoder_state.repeat(2, 1).unsqueeze(0) # Make two copies of context
+
+                model_input = torch.cat([model_input, choices], -1) # Add label and distractor
+                attention_mask = model_input != self.NULL_IDX
+
+                hidden_states, _ = self.model.decoder.transformer(
+                    input_ids=model_input, attention_mask=attention_mask)
+
+                mc_labels = torch.LongTensor([0]).to("cuda") # Correct label is always at index 0
+                if bsz > 1:
+                    mc_labels = mc_labels.repeat(bsz, 1)
+                mc_token_ids = torch.LongTensor([batch.text_lengths[0] + batch.label_lengths[0] - 1,
+                                                batch.text_lengths[0] + batch.distractor_lengths[0] - 1]).to("cuda")
+                mc_token_ids = mc_token_ids.unsqueeze(0)
+                mc_logits = self.model.mc_head(
+                    hidden_states, mc_token_ids).squeeze(-1)
+
+                if batch.label_vec is not None:
+                    mc_loss = self.criterion(
+                        mc_logits.view(-1, mc_logits.size(-1)), mc_labels.view(-1))
+
+                _, mc_preds = mc_logits.max(dim=1)
+                mc_correct = ((mc_labels == mc_preds)).sum().unsqueeze(-1)
+
+                #self.record_local_metric('mc_accuracy', AverageMetric.many(mc_correct))
+                self.record_local_metric('mc_loss', AverageMetric.many(mc_loss))
+
+                candidate = [batch.candidates[0][mc_preds.item()]]
+
+
         # save loss to metrics
         notnull = batch.label_vec.ne(self.NULL_IDX)
         target_tokens = notnull.long().sum(dim=-1)
         correct = ((batch.label_vec == preds) * notnull).sum(dim=-1)
 
-        if hasattr(self, 'mc_head'):
-            hidden_states, _ = self.model.decoder.transformer(
-                input_ids=encoder_state)
-
-            mc_logits = self.model.mc_head(
-                hidden_states, batch.mc_token_ids).squeeze(-1)
-
-            if batch.label_vec is not None:
-                mc_loss_fct = CrossEntropyLoss()
-                mc_loss = loss_fct(
-                    mc_logits.view(-1, mc_logits.size(-1)), batch.label_vec.view(-1))
-
         self.record_local_metric(
-            'loss', AverageMetric.many(loss, target_tokens))
-        self.record_local_metric('ppl', PPLMetric.many(loss, target_tokens))
+            'lm_loss', AverageMetric.many(lm_loss, target_tokens))
+
+        self.record_local_metric('ppl', PPLMetric.many(lm_loss, target_tokens))
         self.record_local_metric(
             'token_acc', AverageMetric.many(correct, target_tokens)
         )
         # actually do backwards loss
-        loss = loss.sum()
-        loss /= target_tokens.sum()  # average loss per token
+        lm_loss = lm_loss.sum()
+        lm_loss /= target_tokens.sum()  # average loss per token
+
+        lm_coef = 0.5
+        mc_coef = 0.5
+
+        if mc_loss is None:
+            loss = lm_loss
+        else:
+            loss = lm_loss * lm_coef + mc_loss * mc_coef # Combined loss
+
         if return_output:
-            return (loss, model_output)
+            return (loss, model_output, candidate)
         else:
             return loss
 
@@ -390,9 +440,71 @@ class DialogptAgent(TorchGeneratorAgent):
         obs = super().vectorize(*args, **kwargs)
 
         distractor = obs["distractor_label"]
-        obs["distractor_vec"] = self._vectorize_text(distractor[0], add_start=False, add_end=True, truncate=kwargs["label_truncate"], truncate_left=False)
+        obs["distractor_vec"] = self._vectorize_text(
+            distractor[0], add_start=False, add_end=True, truncate=kwargs["label_truncate"], truncate_left=False)
 
         return obs
+
+    def batchify(self, obs_batch, sort=False):
+        batch: Batch = super().batchify(obs_batch)
+
+        exs = obs_batch
+        label_vecs = [ex.get("distractor_vec", self.EMPTY) for ex in exs]
+        labels = [ex.get("distractor_label") for ex in exs]
+
+        y_lens = [y.shape[0] for y in label_vecs]
+
+        ys, y_lens = self._pad_tensor(label_vecs)
+
+        batch["distractor_vec"] = ys
+        batch["distractors"] = labels
+        batch["distractor_lengths"] = y_lens
+
+        xs = [ex.get("text_vec", self.EMPTY) for ex in exs]
+        x_lens = [x.shape[0] for x in xs]
+
+        batch["mc_token_ids"] = [
+            (len_x + len_y) - 1 for len_x, len_y in zip(x_lens, y_lens)]
+
+        return batch
+
+    # def _dummy_batch(self, batchsize, maxlen):
+    #     """
+    #     Create a dummy batch.
+
+    #     This is used to preinitialize the cuda buffer, or otherwise force a
+    #     null backward pass after an OOM.
+
+    #     If your model uses additional inputs beyond text_vec and label_vec,
+    #     you will need to override it to add additional fields.
+    #     """
+    #     return Batch(
+    #         text_vec=torch.ones(batchsize, maxlen).long().cuda(),
+    #         label_vec=torch.ones(batchsize, 2).long().cuda(),
+    #         distractor_vec=torch.ones(batchsize, 2).long().cuda(),
+    #         text_lengths=[maxlen] * batchsize,
+    #         mc_token_ids=None
+    #     )
+
+    def _set_label_cands_vec(self, obs, add_start, add_end, truncate):
+        """
+        Set the 'label_candidates_vec' field in the observation.
+
+        Useful to override to change vectorization behavior
+        """
+        if 'label_candidates_vecs' in obs:
+            if truncate is not None:
+                # check truncation of pre-computed vectors
+                vecs = obs['label_candidates_vecs']
+                for i, c in enumerate(vecs):
+                    vecs[i] = self._check_truncate(c, truncate)
+        elif obs.get('label_candidates'):
+            obs.force_set('label_candidates', list(obs['label_candidates']))
+            obs['label_candidates_vecs'] = [
+                self._vectorize_text(c, add_start, add_end, truncate, False)
+                for c in obs['label_candidates']
+            ]
+        return obs    
 
     def train_step(self, batch):
         """
@@ -406,9 +518,10 @@ class DialogptAgent(TorchGeneratorAgent):
         self.zero_grad()
 
         try:
-            loss = self.compute_loss(batch)
+            loss, _, candidates = self.compute_loss(batch, return_output=True)
             self.backward(loss)
             self.update_params()
+            return Output(text=candidates)
         except RuntimeError as e:
             # catch out of memory exceptions during fwd/bck (skip batch)
             if 'out of memory' in str(e):
@@ -440,7 +553,7 @@ class DialogptAgent(TorchGeneratorAgent):
 
         if batch.label_vec is not None:
             # calculate loss on targets with teacher forcing
-            loss, model_output = self.compute_loss(batch, return_output=True)
+            loss, model_output, candidates = self.compute_loss(batch, return_output=True)
             if self.output_token_losses:
                 token_losses = self._construct_token_losses(
                     batch.label_vec, model_output
@@ -480,7 +593,7 @@ class DialogptAgent(TorchGeneratorAgent):
                 _, ordering = cand_scores.sort()
                 cand_choices.append([batch.candidates[i][o] for o in ordering])
 
-        text = [self._v2t(p) for p in preds] if preds is not None else None
+        text = candidates if candidates is not None else None
         if text and self.compute_tokenized_bleu:
             # compute additional bleu scores
             self._compute_fairseq_bleu(batch, preds)
