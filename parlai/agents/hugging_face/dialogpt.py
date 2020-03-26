@@ -6,7 +6,7 @@
 
 
 from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel, PPLMetric
-from parlai.core.torch_agent import Output
+from parlai.core.torch_agent import Output, Batch
 from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
 from parlai.agents.hugging_face.dialogger import DialoggerHistory
 from parlai.utils.misc import warn_once, AttrDict
@@ -53,6 +53,7 @@ class DialoGPTModel(TorchGeneratorModel):
         )
 
         if opt["next_sentence_prediction"]:
+            self.next_sentence_prediction = True
             self.config.num_labels = 1
             self.mc_head = SequenceSummary(self.config)  # Multiple choice head
 
@@ -114,11 +115,7 @@ class DialoGPTModel(TorchGeneratorModel):
         return tuple(new_incr_state)
 
     def decode_forced(self, xs, ys):
-        """
-        Override to get rid of start token input.
-        """
-        if self.add_start_token:
-            return super().decode_forced(xs, ys)
+        
         seqlen = ys.size(1)
         inputs = ys.narrow(1, 0, seqlen - 1)
 
@@ -134,9 +131,35 @@ class DialoGPTModel(TorchGeneratorModel):
         logits = self.output(latent)
         _, preds = logits.max(dim=2)
         return logits, preds
+    
+    def predict(self, hidden_states, token_ids):
+        token_ids = token_ids.unsqueeze(0)
+        mc_logits = self.mc_head(hidden_states, token_ids).squeeze(-1)
+        return mc_logits
+
+    def decode_forced_and_predict(self, context, cands, token_ids):
+
+        model_input = context.repeat(cands.shape[1], 1).unsqueeze(0) # Make one copy of context for each choice
+
+        model_input = torch.cat([model_input, cands], -1) # Add label and distractor to context
+
+        attention_mask = model_input != self.NULL_IDX
+        latent, _ = self.transformer(input_ids=model_input, attention_mask=attention_mask)
+
+        lm_logits = self.output(latent[..., 0, :])
+        mc_logits = self.predict(latent, token_ids)
+ 
+        _, lm_preds = lm_logits.max(dim=2)
+        _, mc_preds = mc_logits.max(dim=1)
+
+        return lm_logits, lm_preds, mc_logits, mc_preds
 
     def forward(self, *xs, ys=None, prev_enc=None, maxlen=None, bsz=None):
-        model_input, text_lengths = xs
+        if len(xs) > 2:
+            context, text_lengths, cands, mc_token_ids = xs
+        else:
+            context, text_lengths = xs
+
         if ys is not None:
             self.text_lengths = text_lengths
         else:
@@ -144,8 +167,12 @@ class DialoGPTModel(TorchGeneratorModel):
 
         assert ys is not None, "Greedy decoding in TGModel.forward no longer supported."
 
-        # use teacher forcing
-        scores, preds = self.decode_forced(model_input, ys)
+        if self.next_sentence_prediction:
+            lm_logits, lm_preds, mc_logits, mc_preds = self.decode_forced_and_predict(context, cands, mc_token_ids)
+            return lm_logits, lm_preds, mc_logits, mc_preds
+        else:
+            # use teacher forcing
+            scores, preds = self.decode_forced(context, ys)
 
         return scores, preds, xs
 
@@ -392,7 +419,13 @@ class DialogptAgent(TorchGeneratorAgent):
         """
         if batch.label_vec is None:
             raise ValueError('Cannot compute loss without a label.')
-        model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
+
+        if batch.candidate_vecs is not None:
+            cands, label_inds, mc_token_ids = self.build_candidates(batch)
+            model_output = self.model(batch.text_vec, batch.text_lengths, cands, mc_token_ids, ys=batch.label_vec)
+        else:
+            model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
+
         scores, preds, *_ = model_output
         score_view = scores.view(-1, scores.size(-1))
         loss = self.criterion(score_view, batch.label_vec.view(-1))
@@ -414,3 +447,41 @@ class DialogptAgent(TorchGeneratorAgent):
             return (loss, model_output)
         else:
             return loss
+
+    def build_candidates(self, batch):
+
+        distractor_length = [batch.candidate_vecs[0][1].size(0)] #TODO make this more general
+
+        label_token_ids = [x+y-1 for x, y in zip(batch.text_lengths, batch.label_lengths)]
+        distractor_token_ids = [x+y-1 for x, y in zip(batch.text_lengths, distractor_length)]
+        mc_token_ids = torch.LongTensor([label_token_ids, distractor_token_ids]).to("cuda")
+        label_inds = torch.LongTensor([0]).to("cuda") # Correct label is always at index 0 #TODO make this not the case #TODO make work for bigger batch size
+        cands = padded_3d(batch.candidate_vecs, use_cuda=True, pad_idx=self.NULL_IDX)
+
+        return cands, label_inds, mc_token_ids
+
+    def vectorize(self, *args, **kwargs):
+        if self.opt["next_sentence_prediction"]: # Hacky solution to include candidate vecs in batch
+            self.rank_candidates = True
+        obs = super().vectorize(*args, **kwargs)
+        if self.opt["next_sentence_prediction"]:
+            self.rank_candidates = False
+        return obs
+
+    def _dummy_batch(self, batchsize, maxlen):
+        """
+        Create a dummy batch.
+
+        This is used to preinitialize the cuda buffer, or otherwise force a
+        null backward pass after an OOM.
+
+        If your model uses additional inputs beyond text_vec and label_vec,
+        you will need to override it to add additional fields.
+        """
+        return Batch(
+            text_vec=torch.ones(batchsize, maxlen).long().cuda(),
+            label_vec=torch.ones(batchsize, 2).long().cuda(),
+            candidate_vecs=[[torch.ones(maxlen).long().cuda() for _ in range(2)] for _ in range(batchsize)],
+            text_lengths=[maxlen] * batchsize,
+            label_lengths=[maxlen] * batchsize,
+        )
