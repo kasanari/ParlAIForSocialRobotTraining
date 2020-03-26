@@ -4,16 +4,23 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel
+
+from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel, PPLMetric
+from parlai.core.torch_agent import Output
 from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
 from parlai.agents.hugging_face.dialogger import DialoggerHistory
-from parlai.utils.misc import warn_once
-from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor
+from parlai.utils.misc import warn_once, AttrDict
+from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor, padded_3d
+from parlai.core.metrics import SumMetric, AverageMetric, BleuMetric, FairseqBleuMetric
+from torch.nn import CrossEntropyLoss
+import torch.nn.functional as F
 
 try:
     from transformers import GPT2Model, GPT2Config, GPT2LMHeadModel, AutoModel
 except ImportError:
     raise ImportError('Please run `pip install transformers`.')
+
+from transformers.modeling_utils import SequenceSummary
 
 import torch
 
@@ -21,64 +28,7 @@ import torch
 # Modules
 ############################################
 
-
-class GPT2Decoder(torch.nn.Module):
-    """
-    GPT2 Decoder.
-
-    This decoder is initialized with the pretrained model from Hugging Face.
-    """
-
-    def __init__(self, opt, dict):
-        super().__init__()
-        # load model
-        model_sz = opt['gpt2_size']
-        self.transformer = AutoModel.from_pretrained(
-            f"microsoft/DialoGPT-{model_sz}")
-        # add special tokens
-        self.start_idx = dict.start_idx
-        self.null_idx = dict.null_idx
-        self.add_start_token = False
-        if opt['add_special_tokens']:
-            self.transformer.resize_token_embeddings(len(dict.tokenizer))
-            self.add_start_token = opt['add_start_token']
-        # use cuda
-        self.use_cuda = not opt['no_cuda'] and torch.cuda.is_available()
-
-    def forward(self, input, encoder_states, incr_state=None):
-        if incr_state is None:
-            # first step
-            if (
-                not self.add_start_token
-                and input.size(1) == 1
-                and int(input[0][0]) == self.start_idx
-            ):
-                # generating: ignore the start token
-                model_input = encoder_states
-            else:
-                # forced decoding: concatenate the context
-                # with the labels
-                model_input, _ = concat_without_padding(
-                    encoder_states,
-                    input,
-                    use_cuda=self.use_cuda,
-                    null_idx=self.null_idx,
-                )
-        else:
-            # generation: get the last token input
-            model_input = input[:, -1].unsqueeze(1)
-
-        attention_mask = model_input != self.null_idx
-        transformer_outputs = self.transformer(
-            model_input, past=incr_state, attention_mask=attention_mask
-        )
-        hidden_states = transformer_outputs[0]
-        new_incr_state = transformer_outputs[1]
-
-        return hidden_states, new_incr_state
-
-
-class HFGPT2Model(TorchGeneratorModel):
+class DialoGPTModel(TorchGeneratorModel):
     """
     Hugging Face GPT2 Model.
 
@@ -95,17 +45,24 @@ class HFGPT2Model(TorchGeneratorModel):
         super().__init__(self.null_idx, self.start_idx, self.end_idx)
 
         # init the model
-        self.encoder = IdentityLayer()
-        self.decoder = GPT2Decoder(opt, dict)
-        self.config = self.decoder.transformer.config
+        self.transformer: GPT2Model = AutoModel.from_pretrained(
+            f"microsoft/DialoGPT-{opt['gpt2_size']}")
+        self.config = self.transformer.config
         self.lm_head = torch.nn.Linear(
             self.config.n_embd, self.config.vocab_size, bias=False
         )
-        self._tie_weights(self.lm_head, self.decoder.transformer.wte)
+
+        self._tie_weights(self.lm_head, self.transformer.wte)
         # add start token
         self.add_start_token = opt['add_special_tokens'] and opt['add_start_token']
         # used to reverse concatenation of context and labels
         self.text_lengths = None
+
+        if opt['add_special_tokens']:
+            self.transformer.resize_token_embeddings(len(dict.tokenizer))
+            self.add_start_token = opt['add_start_token']
+        # use cuda
+        self.use_cuda = not opt['no_cuda'] and torch.cuda.is_available()
 
     def _tie_weights(self, output_embeddings, input_embeddings):
         output_embeddings.weight = input_embeddings.weight
@@ -152,15 +109,24 @@ class HFGPT2Model(TorchGeneratorModel):
 
         return tuple(new_incr_state)
 
-    def decode_forced(self, encoder_states, ys):
+    def decode_forced(self, xs, ys):
         """
         Override to get rid of start token input.
         """
         if self.add_start_token:
-            return super().decode_forced(encoder_states, ys)
+            return super().decode_forced(xs, ys)
         seqlen = ys.size(1)
         inputs = ys.narrow(1, 0, seqlen - 1)
-        latent, _ = self.decoder(inputs, encoder_states)
+
+        model_input, _ = concat_without_padding(
+            xs,
+            inputs,
+            use_cuda=self.use_cuda,
+            null_idx=self.null_idx,
+        )
+
+        latent, _ = self.transformer(input_ids=model_input)
+
         logits = self.output(latent)
         _, preds = logits.max(dim=2)
         return logits, preds
@@ -172,9 +138,12 @@ class HFGPT2Model(TorchGeneratorModel):
         else:
             self.text_lengths = None
 
-        return super().forward(
-            model_input, ys=ys, prev_enc=prev_enc, maxlen=maxlen, bsz=bsz
-        )
+        assert ys is not None, "Greedy decoding in TGModel.forward no longer supported."
+
+        # use teacher forcing
+        scores, preds = self.decode_forced(model_input, ys)
+
+        return scores, preds, xs
 
 
 ############################################
@@ -252,7 +221,7 @@ class DialogptAgent(TorchGeneratorAgent):
         """
         Build and return model.
         """
-        return HFGPT2Model(self.opt, self.dict)
+        return DialoGPTModel(self.opt, self.dict)
 
     def _model_input(self, batch):
         """
@@ -292,16 +261,16 @@ class DialogptAgent(TorchGeneratorAgent):
             tuple (beam_pred_scores, n_best_pred_scores, beams)
 
             - beam_preds_scores: list of (prediction, score) pairs for each sample in
-              Batch
+            Batch
             - n_best_preds_scores: list of n_best list of tuples (prediction, score)
-              for each sample from Batch
+            for each sample from Batch
             - beams :list of Beam instances defined in Beam class, can be used for any
-              following postprocessing, e.g. dot logging.
+            following postprocessing, e.g. dot logging.
         """
         model = self.model
         if isinstance(model, torch.nn.parallel.DistributedDataParallel):
             model = self.model.module
-        encoder_states = model.encoder(*self._encoder_input(batch))
+        encoder_states = batch.text_vec
         if batch.text_vec is not None:
             dev = batch.text_vec.device
         else:
@@ -334,10 +303,20 @@ class DialogptAgent(TorchGeneratorAgent):
 
         for _ts in range(max_ts):
             if all((b.is_done() for b in beams)):
-                # exit early if possible
+                    # exit early if possible
                 break
 
-            score, incr_state = model.decoder(decoder_input, encoder_states, incr_state)
+            if incr_state is None:
+                # first step
+                model_input = encoder_states
+            else:
+                # generation: get the last token input
+                model_input = decoder_input[:, -1].unsqueeze(1)
+
+            attention_mask = model_input != self.NULL_IDX
+
+            score, incr_state = model.transformer(input_ids=model_input, past=incr_state)
+
             # only need the final hidden state to make the word prediction
             score = score[:, -1:, :]
             score = model.output(score)
@@ -377,3 +356,17 @@ class DialogptAgent(TorchGeneratorAgent):
         beam_preds_scores = [n_best_list[0] for n_best_list in n_best_beam_preds_scores]
 
         return beam_preds_scores, beams
+
+    def _v2t(self, vec, ignore_end_idx=False):
+        """
+        Convert token indices to string of tokens.
+        """
+        new_vec = []
+        if hasattr(vec, 'cpu'):
+            vec = vec.cpu()
+        for i in vec:
+            if i == self.END_IDX and not ignore_end_idx:
+                break
+            elif i != self.START_IDX:
+                new_vec.append(i)
+        return self.dict.vec2txt(new_vec)
