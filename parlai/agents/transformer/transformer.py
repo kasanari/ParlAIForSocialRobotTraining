@@ -117,6 +117,12 @@ def add_common_cmdline_args(argparser):
         default=-1,
         help='This will overide the n-layers for asymmetrical transformers',
     )
+    argparser.add_argument(
+        '--model-parallel',
+        type='bool',
+        default=False,
+        help='Shard the layers across multiple GPUs.',
+    )
 
 
 class Transformer(Agent):
@@ -202,16 +208,6 @@ class TransformerRankerAgent(TorchRankerAgent):
         cls.dictionary_class().add_cmdline_args(argparser)
 
         return agent
-
-    def __init__(self, opt, shared=None):
-        super().__init__(opt, shared)
-        self.data_parallel = opt.get('data_parallel') and self.use_cuda
-        if self.data_parallel:
-            from parlai.utils.distributed import is_distributed
-
-            if is_distributed():
-                raise ValueError('Cannot combine --data-parallel and distributed mode')
-            self.model = torch.nn.DataParallel(self.model)
 
     def _score(self, output, cands):
         if cands.dim() == 2:
@@ -347,7 +343,7 @@ class TransformerClassifierAgent(TorchClassifierAgent):
             help='load model from base transformer ranking model '
             '(used for pretraining)',
         )
-        parser.set_params(reduction_type='first')
+        parser.set_defaults(reduction_type='first')
 
     def build_model(self):
         num_classes = len(self.class_list)
