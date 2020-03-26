@@ -380,3 +380,37 @@ class DialogptAgent(TorchGeneratorAgent):
             elif i != self.START_IDX:
                 new_vec.append(i)
         return self.dict.vec2txt(new_vec)
+
+    def compute_loss(self, batch, return_output=False):
+        """
+        Compute and return the loss for the given batch.
+
+        Easily overridable for customized loss functions.
+
+        If return_output is True, the full output from the call to self.model()
+        is also returned, via a (loss, model_output) pair.
+        """
+        if batch.label_vec is None:
+            raise ValueError('Cannot compute loss without a label.')
+        model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
+        scores, preds, *_ = model_output
+        score_view = scores.view(-1, scores.size(-1))
+        loss = self.criterion(score_view, batch.label_vec.view(-1))
+        loss = loss.view(scores.shape[:-1]).sum(dim=1)
+        # save loss to metrics
+        notnull = batch.label_vec.ne(self.NULL_IDX)
+        target_tokens = notnull.long().sum(dim=-1)
+        correct = ((batch.label_vec == preds) * notnull).sum(dim=-1)
+
+        self.record_local_metric('loss', AverageMetric.many(loss, target_tokens))
+        self.record_local_metric('ppl', PPLMetric.many(loss, target_tokens))
+        self.record_local_metric(
+            'token_acc', AverageMetric.many(correct, target_tokens)
+        )
+        # actually do backwards loss
+        loss = loss.sum()
+        loss /= target_tokens.sum()  # average loss per token
+        if return_output:
+            return (loss, model_output)
+        else:
+            return loss
