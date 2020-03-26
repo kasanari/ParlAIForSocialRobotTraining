@@ -52,6 +52,10 @@ class DialoGPTModel(TorchGeneratorModel):
             self.config.n_embd, self.config.vocab_size, bias=False
         )
 
+        if opt["next_sentence_prediction"]:
+            self.config.num_labels = 1
+            self.mc_head = SequenceSummary(self.config)  # Multiple choice head
+
         self._tie_weights(self.lm_head, self.transformer.wte)
         # add start token
         self.add_start_token = opt['add_special_tokens'] and opt['add_start_token']
@@ -191,6 +195,12 @@ class DialogptAgent(TorchGeneratorAgent):
             type='bool',
             default=False,
             help='Add start tokens when finetuning.',
+        )
+        agent.add_argument(
+            '--next-sentence-prediction',
+            type='bool',
+            default=False,
+            help='Add next sentence prediction training objective.',
         )
         argparser.set_defaults(
             text_truncate=768,
