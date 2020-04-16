@@ -64,9 +64,27 @@ class NeilTeacher(FixedDialogTeacher):
             for episode_index, row in enumerate(reader):
                 episode = []
 
-                if row['robot_line'] == '':
-                    episode.append([row["scene"], row["utterance"], row["dominant_affect"], row["scene"]])
-                else:
+                scene_with_direction = " ".join((row["scene"], row['direction'])) # Description of scene combined with "how would the robot responsd ... ?"
+
+                if row['robot_line'] == '' and row['human_line'] == '': 
+                    # Robot makes comment based on situation, 
+                    # input: scene + direction 
+                    # label: utterance
+                    episode.append([scene_with_direction, row["utterance"], row["dominant_affect"], row["scene"]])
+
+                elif row['robot_line'] == '' and row['human_line'] != '': 
+                    # Human says something to robot
+                    # input: scene + direction
+                    # label: utterance
+                    episode.append([scene_with_direction, row["utterance"], row["dominant_affect"], row["scene"]])
+
+                elif row['robot_line'] != '' and row['human_line'] == '': 
+                    # Robot asks something to human
+                    # input: scene + direction
+                    # label: utterance
+                    episode.append([scene_with_direction, row["utterance"], row["dominant_affect"], row["scene"]])
+
+                else: # Conversation between human and robot
                     episode.append([row["scene"], row["robot_line"], row["dominant_affect"], row["scene"]])
                     episode.append([row["human_line"], row["utterance"], row["dominant_affect"], row["scene"]])
 
