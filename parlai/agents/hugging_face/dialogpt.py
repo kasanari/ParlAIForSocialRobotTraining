@@ -471,7 +471,7 @@ class DialogptAgent(TorchGeneratorAgent):
             loss = lm_loss * lm_coef + mc_loss * mc_coef # Combined loss
 
         if return_output:
-            return (loss, model_output, candidate)
+            return (loss, model_output + tuple(candidate))
         else:
             return loss
 
@@ -525,10 +525,11 @@ class DialogptAgent(TorchGeneratorAgent):
         self.zero_grad()
 
         try:
-            loss, model_output, candidate = self.compute_loss(batch, return_output=True)
+            loss, model_output = self.compute_loss(batch, return_output=True)
+            candidate = model_output[-1]
             self.backward(loss)
             self.update_params()
-            return Output(candidate)
+            return Output([candidate])
         except RuntimeError as e:
             # catch out of memory exceptions during fwd/bck (skip batch)
             if 'out of memory' in str(e):
