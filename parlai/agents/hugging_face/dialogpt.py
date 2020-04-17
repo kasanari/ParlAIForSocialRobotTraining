@@ -56,6 +56,7 @@ class DialoGPTModel(TorchGeneratorModel):
             self.next_sentence_prediction = True
             self.config.num_labels = 1
             self.mc_head = SequenceSummary(self.config)  # Multiple choice head
+            self.mc_labels = torch.LongTensor([0]).to("cuda") # Correct label is always at index 0
 
         self._tie_weights(self.lm_head, self.transformer.wte)
         # add start token
@@ -79,7 +80,7 @@ class DialoGPTModel(TorchGeneratorModel):
         enc = torch.index_select(encoder_states, 0, indices)
         return enc
 
-    def output(self, tensor):
+    def output(self, tensor, label_lengths = None):
         """
         Compute output logits.
 
@@ -87,6 +88,17 @@ class DialoGPTModel(TorchGeneratorModel):
         `concat_without_padding` function, we must truncate the input tensor to return
         only the scores for the label tokens.
         """
+
+        if label_lengths is not None:
+            new_tensors = []
+            total_length = max(self.text_lengths)
+            label = tensor[:, total_length:(total_length+label_lengths), :]
+
+            new_tensors.append(label)
+            tensor = torch.cat(new_tensors, 0)
+            return self.lm_head(tensor)
+
+
         # get only scores for labels
         if self.text_lengths is not None:
             total_length = max(self.text_lengths)
@@ -133,7 +145,7 @@ class DialoGPTModel(TorchGeneratorModel):
         return logits, preds
     
     def predict(self, hidden_states, token_ids):
-        token_ids = token_ids.unsqueeze(0)
+        #token_ids = token_ids.unsqueeze(0)
         mc_logits = self.mc_head(hidden_states, token_ids).squeeze(-1)
         return mc_logits
 
@@ -146,7 +158,7 @@ class DialoGPTModel(TorchGeneratorModel):
         attention_mask = model_input != self.NULL_IDX
         latent, _ = self.transformer(input_ids=model_input, attention_mask=attention_mask)
 
-        lm_logits = self.output(latent[..., 0, :])
+        lm_logits = self.output(latent[:, 0, ...], label_lengths=self.label_lengths)
         mc_logits = self.predict(latent, token_ids)
  
         _, lm_preds = lm_logits.max(dim=2)
@@ -162,6 +174,7 @@ class DialoGPTModel(TorchGeneratorModel):
 
         if ys is not None:
             self.text_lengths = text_lengths
+            self.label_lengths = ys.shape[1]
         else:
             self.text_lengths = None
 
@@ -423,28 +436,43 @@ class DialogptAgent(TorchGeneratorAgent):
         if batch.candidate_vecs is not None:
             cands, label_inds, mc_token_ids = self.build_candidates(batch)
             model_output = self.model(batch.text_vec, batch.text_lengths, cands, mc_token_ids, ys=batch.label_vec)
+
+            lm_logits, lm_preds, mc_logits, mc_preds = model_output
+            mc_labels = self.model.mc_labels
+
+            mc_loss = self.criterion(mc_logits.view(-1, mc_logits.size(-1)), mc_labels.view(-1))
+            self.record_local_metric('mc_loss', AverageMetric.many(mc_loss))
+            if batch.candidates is not None:
+                candidate = [batch.candidates[0][mc_preds.item()]]
+
         else:
             model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
+            lm_logits, lm_preds, *_ = model_output
 
-        scores, preds, *_ = model_output
-        score_view = scores.view(-1, scores.size(-1))
-        loss = self.criterion(score_view, batch.label_vec.view(-1))
-        loss = loss.view(scores.shape[:-1]).sum(dim=1)
+        score_view = lm_logits.view(-1, lm_logits.size(-1))
+        lm_loss = self.criterion(score_view, batch.label_vec[0].view(-1))
+        lm_loss = lm_loss.view(lm_logits.shape[:-1]).sum(dim=1)
         # save loss to metrics
         notnull = batch.label_vec.ne(self.NULL_IDX)
         target_tokens = notnull.long().sum(dim=-1)
-        correct = ((batch.label_vec == preds) * notnull).sum(dim=-1)
+        correct = ((batch.label_vec == lm_preds) * notnull).sum(dim=-1)
 
-        self.record_local_metric('loss', AverageMetric.many(loss, target_tokens))
-        self.record_local_metric('ppl', PPLMetric.many(loss, target_tokens))
+        self.record_local_metric('lm_loss', AverageMetric.many(lm_loss, target_tokens))
+        self.record_local_metric('ppl', PPLMetric.many(lm_loss, target_tokens))
         self.record_local_metric(
             'token_acc', AverageMetric.many(correct, target_tokens)
         )
-        # actually do backwards loss
-        loss = loss.sum()
-        loss /= target_tokens.sum()  # average loss per token
+
+        lm_coef = 0.5
+        mc_coef = 0.5
+
+        if mc_loss is None:
+            loss = lm_loss
+        else:
+            loss = lm_loss * lm_coef + mc_loss * mc_coef # Combined loss
+
         if return_output:
-            return (loss, model_output)
+            return (loss, model_output, candidate)
         else:
             return loss
 
@@ -458,7 +486,7 @@ class DialogptAgent(TorchGeneratorAgent):
         label_inds = torch.LongTensor([0]).to("cuda") # Correct label is always at index 0 #TODO make this not the case #TODO make work for bigger batch size
         cands = padded_3d(batch.candidate_vecs, use_cuda=True, pad_idx=self.NULL_IDX)
 
-        return cands, label_inds, mc_token_ids
+        return cands, label_inds, torch.t(mc_token_ids)
 
     def vectorize(self, *args, **kwargs):
         if self.opt["next_sentence_prediction"]: # Hacky solution to include candidate vecs in batch
@@ -480,7 +508,7 @@ class DialogptAgent(TorchGeneratorAgent):
         """
         return Batch(
             text_vec=torch.ones(batchsize, maxlen).long().cuda(),
-            label_vec=torch.ones(batchsize, 2).long().cuda(),
+            label_vec=torch.ones(batchsize, maxlen).long().cuda(),
             candidate_vecs=[[torch.ones(maxlen).long().cuda() for _ in range(2)] for _ in range(batchsize)],
             text_lengths=[maxlen] * batchsize,
             label_lengths=[maxlen] * batchsize,
