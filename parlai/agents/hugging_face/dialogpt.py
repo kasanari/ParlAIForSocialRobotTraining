@@ -438,9 +438,8 @@ class DialogptAgent(TorchGeneratorAgent):
             model_output = self.model(batch.text_vec, batch.text_lengths, cands, mc_token_ids, ys=batch.label_vec)
 
             lm_logits, lm_preds, mc_logits, mc_preds = model_output
-            mc_labels = self.model.mc_labels
 
-            mc_loss = self.criterion(mc_logits.view(-1, mc_logits.size(-1)), mc_labels.view(-1))
+            mc_loss = self.criterion(mc_logits.view(-1, mc_logits.size(-1)), self.model.mc_labels.view(-1))
             self.record_local_metric('mc_loss', AverageMetric.many(mc_loss))
             if batch.candidates is not None:
                 candidate = [batch.candidates[0][mc_preds.item()]]
@@ -513,3 +512,33 @@ class DialogptAgent(TorchGeneratorAgent):
             text_lengths=[maxlen] * batchsize,
             label_lengths=[maxlen] * batchsize,
         )
+
+    def train_step(self, batch):
+        """
+        Train on a single batch of examples.
+        """
+        # helps with memory usage
+        # note we want to use the opt's batchsize instead of the observed batch size
+        # in case dynamic batching is in use
+        self._init_cuda_buffer(self.opt['batchsize'], self.label_truncate or 256)
+        self.model.train()
+        self.zero_grad()
+
+        try:
+            loss = self.compute_loss(batch)
+            self.backward(loss)
+            self.update_params()
+        except RuntimeError as e:
+            # catch out of memory exceptions during fwd/bck (skip batch)
+            if 'out of memory' in str(e):
+                print(
+                    '| WARNING: ran out of memory, skipping batch. '
+                    'if this happens frequently, decrease batchsize or '
+                    'truncate the inputs to the model.'
+                )
+                self.global_metrics.add('skipped_batches', SumMetric(1))
+                # gradients are synced on backward, now this model is going to be
+                # out of sync! catch up with the other workers
+                self._init_cuda_buffer(8, 8, True)
+            else:
+                raise e
