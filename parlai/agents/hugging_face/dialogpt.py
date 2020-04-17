@@ -525,9 +525,10 @@ class DialogptAgent(TorchGeneratorAgent):
         self.zero_grad()
 
         try:
-            loss = self.compute_loss(batch)
+            loss, model_output, candidate = self.compute_loss(batch, return_output=True)
             self.backward(loss)
             self.update_params()
+            return Output(candidate)
         except RuntimeError as e:
             # catch out of memory exceptions during fwd/bck (skip batch)
             if 'out of memory' in str(e):
