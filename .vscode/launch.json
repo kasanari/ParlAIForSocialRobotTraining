@@ -87,7 +87,7 @@
                 "-bs",
                 "1",
                 "-vtim",
-                "10",
+                "3600",
                 "-mf",
                 "models/dialogpt-mc/dialogpt-mc",
                 "--inference",
