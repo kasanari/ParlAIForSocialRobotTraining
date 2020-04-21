@@ -24,6 +24,12 @@ class EmpatheticDialoguesExtraTeacher(EmpatheticDialoguesTeacher):
 
         distractor_ep = self.data[random.randrange(self.num_episodes())]
         distractor_ep_i = distractor_ep[0]
+
+        random.seed()
+        if random.random() > 0.5:
+            label_candidate = [ep_i[1], distractor_ep_i[1]]  
+        else: 
+            label_candidate = [distractor_ep_i[1], ep_i[1]]        
         
         action = {
             'situation': ep_i[3],
@@ -35,7 +41,7 @@ class EmpatheticDialoguesExtraTeacher(EmpatheticDialoguesTeacher):
             'deepmoji_ctx': ep_i[4],
             'deepmoji_cand': ep_i[5],
             'episode_done': episode_done,
-            'label_candidates': [ep_i[1], distractor_ep_i[1]],
+            'label_candidates': label_candidate,
         }
         return action
 
