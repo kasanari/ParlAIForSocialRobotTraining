@@ -16,6 +16,9 @@ EVAL_ARGS = $(MODEL_ARGS) --save-world-logs True --report-filename eval_results 
 dialogpt-mc:
 	python examples/train_model.py $(TRAIN_ARGS) -t $(TASK) -m hugging_face/dialogpt --next_sentence_prediction True
 
+gpt2:
+	python examples/train_model.py $(TRAIN_ARGS) -t $(TASK) -m hugging_face/gpt2 --history-add-global-end-token end
+
 eval:
 	python exampels/eval_model.py $(EVAL_ARGS)
 		
