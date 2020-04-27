@@ -6,7 +6,7 @@
 
 
 from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel, PPLMetric
-from parlai.core.torch_agent import Output, Batch
+from parlai.core.torch_agent import Output, Batch, History
 from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
 from parlai.agents.hugging_face.dialogger import DialoggerHistory
 from parlai.utils.misc import warn_once, AttrDict
@@ -14,6 +14,7 @@ from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_ten
 from parlai.core.metrics import SumMetric, AverageMetric, BleuMetric, FairseqBleuMetric
 from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
+from collections import deque
 
 try:
     from transformers import GPT2Model, GPT2Config, GPT2LMHeadModel, AutoModel
@@ -27,6 +28,20 @@ import torch
 ############################################
 # Modules
 ############################################
+
+class DialoGPTHistory(History):
+    """
+    Handles tokenization history.
+    """
+
+    def get_history_vec(self):
+
+        history = deque(maxlen=self.max_len)
+        for vec in self.history_vecs:
+            history.extend(vec)
+            history.extend([self.dict.end_idx])
+
+        return history
 
 class DialoGPTModel(TorchGeneratorModel):
     """
@@ -262,6 +277,10 @@ class DialogptAgent(TorchGeneratorAgent):
             )
         super().__init__(opt, shared)
 
+        #self.delimiter = opt.get('delimiter', '\n')
+        self.delimiter_tok = [self.dict[self.dict.end_token]]
+        self._global_end_token = self.dict[self.dict.end_token]
+
     @staticmethod
     def dictionary_class():
         """
@@ -288,7 +307,7 @@ class DialogptAgent(TorchGeneratorAgent):
 
     @staticmethod
     def history_class():
-        return DialoggerHistory
+        return DialoGPTHistory
 
     def _pad_tensor(self, items):
         """
