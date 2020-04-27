@@ -8,6 +8,7 @@ from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGenerato
 from parlai.agents.hugging_face.dict import Gpt2DictionaryAgent
 from parlai.utils.misc import warn_once
 from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor
+from .dialogpt import DialoGPTHistory
 
 try:
     from transformers import GPT2Model
@@ -259,6 +260,10 @@ class Gpt2Agent(TorchGeneratorAgent):
         Override to pass in text lengths.
         """
         return (batch.text_vec, batch.text_lengths)
+
+    @staticmethod
+    def history_class():
+        return DialoGPTHistory
 
     def _encoder_input(self, batch):
         return (batch.text_vec,)
