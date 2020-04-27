@@ -4,12 +4,11 @@ VTIM = 7200
 STIM = 3600
 MODEL_PATH = models/$(TASK)/$@/$@
 
-BASE_ARGS = --add-special-tokens True --add-start-token False --gpt2-size $(GPT-SIZE)\
-	--inference beam --beam-size 10 --beam-context-block-ngram 3 --beam-block-ngram 3\
-	--beam-min-length 25
+MODEL_ARGS = -mf $(MODEL_PATH) -im $(MODEL_PATH) --add-special-tokens True --add-start-token False --gpt2-size $(GPT-SIZE)\
+	--inference topk --topk 10 
 
-TRAIN_ARGS = $(MODEL_ARGS) -tblog True -bs 1 -vtim $(VTIM) -stim $(STIM) -vmt ppl -vmm min -mf $(MODEL_PATH) --optimizer \
-							adam -lr 6.25e-5
+TRAIN_ARGS = $(MODEL_ARGS) -tblog True -bs 1 -vtim $(VTIM) -stim $(STIM) -vmt ppl -vmm min --optimizer \
+							adam -lr 6.25e-5 -vp 3 -veps 1 --load_from_checkpoint True
 
 EVAL_ARGS = $(MODEL_ARGS) --save-world-logs True --report-filename eval_results -d True
 
