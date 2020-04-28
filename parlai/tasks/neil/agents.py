@@ -64,7 +64,9 @@ class NeilTeacher(FixedDialogTeacher):
             for episode_index, row in enumerate(reader):
                 episode = []
 
-                scene_with_direction = " ".join((row["scene"], row['direction'])) # Description of scene combined with "how would the robot responsd ... ?"
+                direction = f"If the robot is {row['dominant_affect']}, " + row['direction'][0].lower() + row['direction'][1:]
+
+                scene_with_direction = " ".join((row["scene"], direction)) # Description of scene combined with "how would the robot responsd ... ?"
 
                 if row['robot_line'] == '' and row['human_line'] == '': 
                     # Robot makes comment based on situation, 
