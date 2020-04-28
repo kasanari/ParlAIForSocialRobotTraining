@@ -1,7 +1,7 @@
 #TASK = empathetic_dialogues
 GPT-SIZE = medium
 VTIM = 7200
-STIM = 3600
+STIM = 1800
 MODEL_PATH = models/$(TASK)/$@/$@
 
 MODEL_ARGS = -mf $(MODEL_PATH) -im $(MODEL_PATH) --add-special-tokens True --add-start-token False --gpt2-size $(GPT-SIZE)\
