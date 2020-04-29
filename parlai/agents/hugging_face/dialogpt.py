@@ -455,6 +455,7 @@ class DialogptAgent(TorchGeneratorAgent):
         If return_output is True, the full output from the call to self.model()
         is also returned, via a (loss, model_output) pair.
         """
+        
         if batch.label_vec is None:
             raise ValueError('Cannot compute loss without a label.')
 
@@ -472,6 +473,7 @@ class DialogptAgent(TorchGeneratorAgent):
         else:
             model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
             lm_logits, lm_preds, *_ = model_output
+            mc_loss = None
 
         score_view = lm_logits.view(-1, lm_logits.size(-1))
         lm_loss = self.criterion(score_view, batch.label_vec[0].view(-1))
@@ -497,7 +499,10 @@ class DialogptAgent(TorchGeneratorAgent):
             self.record_local_metric('total_loss', AverageMetric.many(loss))
 
         if return_output:
-            return (loss, model_output + tuple(candidate))
+            if self.model.next_sentence_prediction:
+                model_output += tuple(candidate)
+            else:
+                return (loss, model_output)
         else:
             return loss
 
@@ -567,7 +572,8 @@ class DialogptAgent(TorchGeneratorAgent):
             candidate = model_output[-1]
             self.backward(loss)
             self.update_params()
-            return Output([candidate])
+            if self.model.next_sentence_prediction:
+                return Output([candidate])
         except RuntimeError as e:
             # catch out of memory exceptions during fwd/bck (skip batch)
             if 'out of memory' in str(e):
