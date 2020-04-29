@@ -72,6 +72,8 @@ class DialoGPTModel(TorchGeneratorModel):
             self.config.num_labels = 1
             self.mc_head = SequenceSummary(self.config)  # Multiple choice head
             self.mc_labels = torch.LongTensor([0]).to("cuda") # Correct label is always at index 0
+        else:
+            self.next_sentence_prediction = False
 
         self._tie_weights(self.lm_head, self.transformer.wte)
         # add start token
