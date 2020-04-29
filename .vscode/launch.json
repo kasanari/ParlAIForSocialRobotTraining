@@ -44,13 +44,15 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "Eval",
+            "name": "Eval GPT2",
             "type": "python",
             "request": "launch",
             "program": "examples/eval_model.py",
             "args": [
                 "-m",
-                "hugging_face/dialogpt",
+                "hugging_face/gpt2",
+                "-mf",
+                "models/empathetic_dialogues/gpt2/gpt2",
                 "--gpt2-size",
                 "medium",
                 "-t",
@@ -60,7 +62,7 @@
                 "--report-filename",
                 "eval_results",
                 "--add-special-tokens",
-                "False",
+                "True",
                 "-d",
                 "True"
             ],
