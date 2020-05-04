@@ -112,7 +112,7 @@ class DialoGPTModel(TorchGeneratorModel):
 
         if label_lengths is not None:
             new_tensors = []
-            total_length = max(self.text_lengths)
+            total_length = max(self.text_lengths) - 1
             label = tensor[:, total_length:(total_length+label_lengths), :]
 
             new_tensors.append(label)
