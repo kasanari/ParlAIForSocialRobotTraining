@@ -69,6 +69,29 @@
             "console": "integratedTerminal"
         },
         {
+            "name": "Eval DialoGPT",
+            "type": "python",
+            "request": "launch",
+            "program": "examples/eval_model.py",
+            "args": [
+                "-m",
+                "hugging_face/dialogpt",
+                "--gpt2-size",
+                "medium",
+                "-t",
+                "empathetic_dialogues",
+                "--save-world-logs",
+                "True",
+                "--report-filename",
+                "eval_results",
+                "--add-special-tokens",
+                "True",
+                "-d",
+                "True"
+            ],
+            "console": "integratedTerminal"
+        },
+        {
             "name": "Train (dialogpt ED)",
             "type": "python",
             "request": "launch",
