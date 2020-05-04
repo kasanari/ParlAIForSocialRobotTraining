@@ -11,7 +11,7 @@ from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
 from parlai.agents.hugging_face.dialogger import DialoggerHistory
 from parlai.utils.misc import warn_once, AttrDict
 from parlai.utils.torch import IdentityLayer, concat_without_padding, padded_tensor, padded_3d
-from parlai.core.metrics import SumMetric, AverageMetric, BleuMetric, FairseqBleuMetric
+from parlai.core.metrics import SumMetric, AverageMetric, BleuMetric, FairseqBleuMetric, ExactMatchMetric
 from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
 from collections import deque
@@ -73,6 +73,11 @@ class DialoGPTModel(TorchGeneratorModel):
             self.mc_head = SequenceSummary(self.config)  # Multiple choice head
         else:
             self.next_sentence_prediction = False
+
+        # if opt["emotion_prediction"]:
+        #     self.emotion_prediction = True
+        #     self.config.num_labels = 2
+        #     self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
 
         self._tie_weights(self.lm_head, self.transformer.wte)
         # add start token
@@ -468,7 +473,12 @@ class DialogptAgent(TorchGeneratorAgent):
             mc_loss = self.criterion(mc_logits.view(-1, mc_logits.size(-1)), label_inds.view(-1))
             self.record_local_metric('mc_loss', AverageMetric.many(mc_loss))
             if batch.candidates is not None:
-                candidate = [batch.candidates[0][mc_preds.item()]]
+
+                candidate = batch.candidates[0][mc_preds.item()]
+
+                self.metrics['mc_accuracy'] = self.metrics.get('mc_accuracy') + ExactMatchMetric.compute(candidate, batch.labels)
+
+                self.record_local_metric('mc_accuracy', [self.metrics['mc_accuracy']])
 
         else:
             model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
@@ -499,9 +509,6 @@ class DialogptAgent(TorchGeneratorAgent):
             self.record_local_metric('total_loss', AverageMetric.many(loss))
 
         if return_output:
-            if self.model.next_sentence_prediction:
-                model_output += tuple(candidate)
-
             return (loss, model_output)
         else:
             return loss
@@ -561,36 +568,3 @@ class DialogptAgent(TorchGeneratorAgent):
             text_lengths=[maxlen] * batchsize,
             label_lengths=[maxlen] * batchsize,
         )
-
-    def train_step(self, batch):
-        """
-        Train on a single batch of examples.
-        """
-        # helps with memory usage
-        # note we want to use the opt's batchsize instead of the observed batch size
-        # in case dynamic batching is in use
-        self._init_cuda_buffer(self.opt['batchsize'], self.label_truncate or 256)
-        self.model.train()
-        self.zero_grad()
-
-        try:
-            loss, model_output = self.compute_loss(batch, return_output=True)
-            candidate = model_output[-1]
-            self.backward(loss)
-            self.update_params()
-            if self.model.next_sentence_prediction:
-                return Output([candidate])
-        except RuntimeError as e:
-            # catch out of memory exceptions during fwd/bck (skip batch)
-            if 'out of memory' in str(e):
-                print(
-                    '| WARNING: ran out of memory, skipping batch. '
-                    'if this happens frequently, decrease batchsize or '
-                    'truncate the inputs to the model.'
-                )
-                self.global_metrics.add('skipped_batches', SumMetric(1))
-                # gradients are synced on backward, now this model is going to be
-                # out of sync! catch up with the other workers
-                self._init_cuda_buffer(8, 8, True)
-            else:
-                raise e
