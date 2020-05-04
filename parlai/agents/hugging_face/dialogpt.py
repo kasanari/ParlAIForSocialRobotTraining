@@ -71,7 +71,6 @@ class DialoGPTModel(TorchGeneratorModel):
             self.next_sentence_prediction = True
             self.config.num_labels = 1
             self.mc_head = SequenceSummary(self.config)  # Multiple choice head
-            self.mc_labels = torch.LongTensor([0]).to("cuda") # Correct label is always at index 0
         else:
             self.next_sentence_prediction = False
 
@@ -282,6 +281,7 @@ class DialogptAgent(TorchGeneratorAgent):
         #self.delimiter = opt.get('delimiter', '\n')
         self.delimiter_tok = [self.dict[self.dict.end_token]]
         self._global_end_token = self.dict[self.dict.end_token]
+        self.use_cuda = not opt['no_cuda'] and torch.cuda.is_available()
 
     @staticmethod
     def dictionary_class():
@@ -501,8 +501,8 @@ class DialogptAgent(TorchGeneratorAgent):
         if return_output:
             if self.model.next_sentence_prediction:
                 model_output += tuple(candidate)
-            else:
-                return (loss, model_output)
+
+            return (loss, model_output)
         else:
             return loss
 
@@ -524,9 +524,15 @@ class DialogptAgent(TorchGeneratorAgent):
 
         label_token_ids = [x+y-1 for x, y in zip(batch.text_lengths, batch.label_lengths)]
         distractor_token_ids = [x+y-1 for x, y in zip(batch.text_lengths, distractor_length)]
-        mc_token_ids = torch.LongTensor([label_token_ids, distractor_token_ids]).to("cuda")
-        label_inds = torch.LongTensor([label_id]).to("cuda") # Correct label is always at index 0 #TODO make this not the case #TODO make work for bigger batch size
-        cands = padded_3d(batch.candidate_vecs, use_cuda=True, pad_idx=self.NULL_IDX)
+
+        mc_token_ids = torch.tensor([label_token_ids, distractor_token_ids])
+        label_inds = torch.tensor([label_id]) # Correct label is always at index 0 #TODO make this not the case #TODO make work for bigger batch size
+
+        if self.use_cuda:
+            mc_token_ids = mc_token_ids.cuda()
+            label_inds = label_inds.cuda()
+
+        cands = padded_3d(batch.candidate_vecs, use_cuda=self.use_cuda, pad_idx=self.NULL_IDX)
 
         return cands, label_inds, torch.t(mc_token_ids)
 
