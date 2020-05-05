@@ -29,6 +29,85 @@ import torch
 # Modules
 ############################################
 
+
+class Batch(AttrDict):
+    """
+    Batch is a namedtuple containing data being sent to an agent.
+
+    This is the input type of the train_step and eval_step functions.
+    Agents can override the batchify function to return an extended namedtuple
+    with additional fields if they would like, though we recommend calling the
+    parent function to set up these fields as a base.
+
+    :param text_vec:
+        bsz x seqlen tensor containing the parsed text data.
+
+    :param text_lengths:
+        list of length bsz containing the lengths of the text in same order as
+        text_vec; necessary for pack_padded_sequence.
+
+    :param label_vec:
+        bsz x seqlen tensor containing the parsed label (one per batch row).
+
+    :param label_lengths:
+        list of length bsz containing the lengths of the labels in same order as
+        label_vec.
+
+    :param labels:
+        list of length bsz containing the selected label for each batch row (some
+        datasets have multiple labels per input example).
+
+    :param valid_indices:
+        list of length bsz containing the original indices of each example in the
+        batch. we use these to map predictions back to their proper row, since e.g.
+        we may sort examples by their length or some examples may be invalid.
+
+    :param candidates:
+        list of lists of text. outer list has size bsz, inner lists vary in size
+        based on the number of candidates for each row in the batch.
+
+    :param candidate_vecs:
+        list of lists of tensors. outer list has size bsz, inner lists vary in size
+        based on the number of candidates for each row in the batch.
+
+    :param image:
+        list of image features in the format specified by the --image-mode arg.
+
+    :param observations:
+        the original observations in the batched order
+    """
+
+    def __init__(
+        self,
+        text_vec=None,
+        text_lengths=None,
+        label_vec=None,
+        label_lengths=None,
+        labels=None,
+        valid_indices=None,
+        candidates=None,
+        candidate_vecs=None,
+        image=None,
+        observations=None,
+        emotion=None,
+        **kwargs,
+    ):
+        super().__init__(
+            text_vec=text_vec,
+            text_lengths=text_lengths,
+            label_vec=label_vec,
+            label_lengths=label_lengths,
+            labels=labels,
+            valid_indices=valid_indices,
+            candidates=candidates,
+            candidate_vecs=candidate_vecs,
+            image=image,
+            observations=observations,
+            emotion=emotion,
+            **kwargs,
+        )
+
+
 class DialoGPTHistory(History):
     """
     Handles tokenization history.
@@ -74,10 +153,10 @@ class DialoGPTModel(TorchGeneratorModel):
         else:
             self.next_sentence_prediction = False
 
-        # if opt["emotion_prediction"]:
-        #     self.emotion_prediction = True
-        #     self.config.num_labels = 2
-        #     self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
+        if opt["emotion_prediction"]:
+             self.emotion_prediction = True
+             self.config.num_labels = 32
+             self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
 
         self._tie_weights(self.lm_head, self.transformer.wte)
         # add start token
@@ -170,6 +249,10 @@ class DialoGPTModel(TorchGeneratorModel):
         mc_logits = self.mc_head(hidden_states, token_ids).squeeze(-1)
         return mc_logits
 
+    def predict_emotion(self, hidden_states, token_ids):
+        ec_logits = self.emo_head(hidden_states, token_ids).squeeze(-1)
+        return ec_logits
+
     def decode_forced_and_predict(self, context, cands, token_ids):
 
         model_input = context.repeat(cands.shape[1], 1).unsqueeze(0) # Make one copy of context for each choice
@@ -181,11 +264,13 @@ class DialoGPTModel(TorchGeneratorModel):
 
         lm_logits = self.output(latent[:, self.label_inds.item(), ...], label_lengths=self.label_lengths)
         mc_logits = self.predict(latent, token_ids)
+        ec_logits = self.predict_emotion(latent[:, self.label_inds.item(), ...], token_ids[:, self.label_inds.item()])
  
         _, lm_preds = lm_logits.max(dim=2)
         _, mc_preds = mc_logits.max(dim=1)
+        _, ec_preds = ec_logits.max(dim=1)
 
-        return lm_logits, lm_preds, mc_logits, mc_preds
+        return lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds
 
     def forward(self, *xs, ys=None, prev_enc=None, maxlen=None, bsz=None):
         if len(xs) > 2:
@@ -206,8 +291,8 @@ class DialoGPTModel(TorchGeneratorModel):
         assert ys is not None, "Greedy decoding in TGModel.forward no longer supported."
 
         if self.next_sentence_prediction:
-            lm_logits, lm_preds, mc_logits, mc_preds = self.decode_forced_and_predict(context, cands, mc_token_ids)
-            return lm_logits, lm_preds, mc_logits, mc_preds
+            lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds = self.decode_forced_and_predict(context, cands, mc_token_ids)
+            return lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds
         else:
             # use teacher forcing
             scores, preds = self.decode_forced(context, ys)
@@ -266,6 +351,12 @@ class DialogptAgent(TorchGeneratorAgent):
             type='bool',
             default=False,
             help='Add next sentence prediction training objective.',
+        )
+        agent.add_argument(
+            '--emotion-prediction',
+            type='bool',
+            default=False,
+            help='Add emotion prediction training objective.',
         )
         argparser.set_defaults(
             text_truncate=768,
@@ -460,6 +551,11 @@ class DialogptAgent(TorchGeneratorAgent):
         If return_output is True, the full output from the call to self.model()
         is also returned, via a (loss, model_output) pair.
         """
+        emotions = ["surprised", "excited", "angry", "proud", "sad", "annoyed", "grateful", 
+                "lonely", "afraid", "terrified", "guilty", "impressed", "disgusted", "hopeful", 
+                "confident", "furious", "anxious", "anticipating", "joyful", "nostalgic", 
+                "disappointed", "prepared", "jealous", "content", "devastated", "embarrassed", 
+                "caring", "sentimental", "trusting", "ashamed", "apprehensive", "faithful"]
         
         if batch.label_vec is None:
             raise ValueError('Cannot compute loss without a label.')
@@ -468,22 +564,35 @@ class DialogptAgent(TorchGeneratorAgent):
             cands, label_inds, mc_token_ids = self.build_candidates(batch)
             model_output = self.model(batch.text_vec, batch.text_lengths, cands, mc_token_ids, ys=(batch.label_vec, label_inds))
 
-            lm_logits, lm_preds, mc_logits, mc_preds = model_output
+            lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds = model_output
+
+            if batch.emotion is not None:
+                emo_index = torch.tensor(emotions.index(batch.emotion[0])).unsqueeze(0)
+
+                if self.use_cuda:
+                    emo_index = emo_index.cuda()
+
+                ec_loss = self.criterion(ec_logits.view(-1, ec_logits.size(-1)), emo_index.view(-1))
+                self.record_local_metric("ec_loss", AverageMetric.many(ec_loss))
+                predicted_emotion = emotions[ec_preds.item()]
+                self.metrics['ec_accuracy'] = self.metrics.get('ec_accuracy') + ExactMatchMetric.compute(predicted_emotion, batch.emotion)
+                self.record_local_metric('ec_accuracy', [self.metrics['ec_accuracy']])
+            else:
+                ec_loss = None
 
             mc_loss = self.criterion(mc_logits.view(-1, mc_logits.size(-1)), label_inds.view(-1))
             self.record_local_metric('mc_loss', AverageMetric.many(mc_loss))
+
             if batch.candidates is not None:
-
                 candidate = batch.candidates[0][mc_preds.item()]
-
                 self.metrics['mc_accuracy'] = self.metrics.get('mc_accuracy') + ExactMatchMetric.compute(candidate, batch.labels)
-
                 self.record_local_metric('mc_accuracy', [self.metrics['mc_accuracy']])
 
         else:
             model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
             lm_logits, lm_preds, *_ = model_output
             mc_loss = None
+            ec_loss = None
 
         score_view = lm_logits.view(-1, lm_logits.size(-1))
         lm_loss = self.criterion(score_view, batch.label_vec[0].view(-1))
@@ -501,12 +610,22 @@ class DialogptAgent(TorchGeneratorAgent):
 
         lm_coef = 1.0
         mc_coef = 1.0
+        ec_coef = 1.0
 
-        if mc_loss is None:
-            loss = lm_loss
+        if (mc_loss is None) and (ec_loss is None): 
+            total_loss = None
         else:
-            loss = lm_loss * lm_coef + mc_loss * mc_coef # Combined loss
-            self.record_local_metric('total_loss', AverageMetric.many(loss))
+            total_loss = lm_loss
+            if mc_loss is not None:
+                total_loss *= (mc_loss * mc_coef)
+            if ec_loss is not None:
+                total_loss *= (ec_loss * ec_coef)
+
+        if total_loss is not None:
+            loss = total_loss
+            self.record_local_metric('total_loss', AverageMetric.many(total_loss))
+        else:
+            loss = lm_loss
 
         if return_output:
             return (loss, model_output)
@@ -568,3 +687,44 @@ class DialogptAgent(TorchGeneratorAgent):
             text_lengths=[maxlen] * batchsize,
             label_lengths=[maxlen] * batchsize,
         )
+    
+    def batchify(self, obs_batch, sort=False):
+        """
+        Override so that we can add memories to the Batch object.
+        """
+        batch = super().batchify(obs_batch, sort)
+        batch.emotion = [ex["emotion"] for ex in obs_batch]
+        return batch
+
+    def _set_text_vec(self, obs, history, truncate):
+        """
+        Set the 'text_vec' field in the observation.
+
+        Useful to override to change vectorization behavior
+        """
+
+        if 'text' not in obs:
+            return obs
+
+        if 'text_vec' not in obs:
+            # text vec is not precomputed, so we set it using the history
+            history_string = history.get_history_str()
+            # when text not exist, we get text_vec from history string
+            # history could be none if it is an image task and 'text'
+            # filed is be empty. We don't want this
+            if history_string is None:
+                return obs
+            obs['full_text'] = history_string
+            if history_string:
+                history_vec = history.get_history_vec()
+
+            situation = self.dict.txt2vec(obs['situation']) + [self.dict.end_idx]
+            obs['text_vec'] = situation + list(history_vec)
+
+        # check truncation
+        if obs.get('text_vec') is not None:
+            truncated_vec = self._check_truncate(obs['text_vec'], truncate, True)
+            obs.force_set('text_vec', torch.LongTensor(truncated_vec))
+        return obs
+
+
