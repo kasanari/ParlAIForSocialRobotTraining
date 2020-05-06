@@ -157,6 +157,8 @@ class DialoGPTModel(TorchGeneratorModel):
              self.emotion_prediction = True
              self.config.num_labels = 32
              self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
+        else:
+            self.emotion_prediction = False
 
         self._tie_weights(self.lm_head, self.transformer.wte)
         # add start token
@@ -264,13 +266,18 @@ class DialoGPTModel(TorchGeneratorModel):
 
         lm_logits = self.output(latent[:, self.label_inds.item(), ...], label_lengths=self.label_lengths)
         mc_logits = self.predict(latent, token_ids)
-        ec_logits = self.predict_emotion(latent[:, self.label_inds.item(), ...], token_ids[:, self.label_inds.item()])
- 
+
         _, lm_preds = lm_logits.max(dim=2)
         _, mc_preds = mc_logits.max(dim=1)
-        _, ec_preds = ec_logits.max(dim=1)
 
-        return lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds
+        if self.emotion_prediction:
+
+            ec_logits = self.predict_emotion(latent[:, self.label_inds.item(), ...], token_ids[:, self.label_inds.item()])
+            _, ec_preds = ec_logits.max(dim=1)
+ 
+            return lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds
+        else:
+            return lm_logits, lm_preds, mc_logits, mc_preds
 
     def forward(self, *xs, ys=None, prev_enc=None, maxlen=None, bsz=None):
         if len(xs) > 2:
@@ -291,8 +298,7 @@ class DialoGPTModel(TorchGeneratorModel):
         assert ys is not None, "Greedy decoding in TGModel.forward no longer supported."
 
         if self.next_sentence_prediction:
-            lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds = self.decode_forced_and_predict(context, cands, mc_token_ids)
-            return lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds
+            return self.decode_forced_and_predict(context, cands, mc_token_ids)
         else:
             # use teacher forcing
             scores, preds = self.decode_forced(context, ys)
@@ -564,9 +570,12 @@ class DialogptAgent(TorchGeneratorAgent):
             cands, label_inds, mc_token_ids = self.build_candidates(batch)
             model_output = self.model(batch.text_vec, batch.text_lengths, cands, mc_token_ids, ys=(batch.label_vec, label_inds))
 
-            lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds = model_output
+            if self.opt["emotion_prediction"]:
+                lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds = model_output
+            else:
+                lm_logits, lm_preds, mc_logits, mc_preds = model_output
 
-            if batch.emotion is not None:
+            if (batch.emotion is not None) and self.opt["emotion_prediction"]:
                 emo_index = torch.tensor(emotions.index(batch.emotion[0])).unsqueeze(0)
 
                 if self.use_cuda:
