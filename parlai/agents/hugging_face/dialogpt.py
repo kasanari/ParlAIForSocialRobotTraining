@@ -623,9 +623,9 @@ class DialogptAgent(TorchGeneratorAgent):
         else:
             total_loss = lm_loss
             if mc_loss is not None:
-                total_loss *= (mc_loss * mc_coef)
+                total_loss += (mc_loss * mc_coef)
             if ec_loss is not None:
-                total_loss *= (ec_loss * ec_coef)
+                total_loss += (ec_loss * ec_coef)
 
         if total_loss is not None:
             loss = total_loss
