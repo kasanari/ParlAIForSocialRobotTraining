@@ -376,11 +376,7 @@ class DialogptAgent(TorchGeneratorAgent):
         If return_output is True, the full output from the call to self.model()
         is also returned, via a (loss, model_output) pair.
         """
-        emotions = ["surprised", "excited", "angry", "proud", "sad", "annoyed", "grateful", 
-                "lonely", "afraid", "terrified", "guilty", "impressed", "disgusted", "hopeful", 
-                "confident", "furious", "anxious", "anticipating", "joyful", "nostalgic", 
-                "disappointed", "prepared", "jealous", "content", "devastated", "embarrassed", 
-                "caring", "sentimental", "trusting", "ashamed", "apprehensive", "faithful"]
+
         
         if batch.label_vec is None:
             raise ValueError('Cannot compute loss without a label.')
@@ -395,14 +391,14 @@ class DialogptAgent(TorchGeneratorAgent):
                 lm_logits, lm_preds, mc_logits, mc_preds = model_output
 
             if (batch.emotion is not None) and self.opt["emotion_prediction"]:
-                emo_index = torch.tensor(emotions.index(batch.emotion[0])).unsqueeze(0)
+                emo_index = torch.tensor(batch.emotion_cands.index(batch.emotion[0])).unsqueeze(0)
 
                 if self.use_cuda:
                     emo_index = emo_index.cuda()
 
                 ec_loss = self.criterion(ec_logits.view(-1, ec_logits.size(-1)), emo_index.view(-1))
                 self.record_local_metric("ec_loss", AverageMetric.many(ec_loss))
-                predicted_emotion = emotions[ec_preds.item()]
+                predicted_emotion = batch.emotion_cands[ec_preds.item()]
                 self.metrics['ec_accuracy'] = self.metrics.get('ec_accuracy') + ExactMatchMetric.compute(predicted_emotion, batch.emotion)
                 self.record_local_metric('ec_accuracy', [self.metrics['ec_accuracy']])
             else:
@@ -522,6 +518,7 @@ class DialogptAgent(TorchGeneratorAgent):
         """
         batch = super().batchify(obs_batch, sort)
         batch.emotion = [ex["emotion"] for ex in obs_batch]
+        batch.emotion_cands = obs_batch[0]["emotion_candidates"]
         return batch
 
     def _set_text_vec(self, obs, history, truncate):

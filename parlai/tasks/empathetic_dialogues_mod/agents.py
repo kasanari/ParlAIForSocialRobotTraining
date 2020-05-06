@@ -16,6 +16,14 @@ DEFAULT_TRAIN_EXPERIENCER_ONLY = False
 
 
 class EmpatheticDialoguesExtraTeacher(EmpatheticDialoguesTeacher):
+
+    def __init__(self, opt, shared=None):
+        super().__init__(opt, shared)
+        self.emotion_labels = ["surprised", "excited", "angry", "proud", "sad", "annoyed", "grateful", 
+                "lonely", "afraid", "terrified", "guilty", "impressed", "disgusted", "hopeful", 
+                "confident", "furious", "anxious", "anticipating", "joyful", "nostalgic", 
+                "disappointed", "prepared", "jealous", "content", "devastated", "embarrassed", 
+                "caring", "sentimental", "trusting", "ashamed", "apprehensive", "faithful"]
     
     def get(self, episode_idx, entry_idx=0):
         ep = self.data[episode_idx]
@@ -42,6 +50,7 @@ class EmpatheticDialoguesExtraTeacher(EmpatheticDialoguesTeacher):
             'deepmoji_cand': ep_i[5],
             'episode_done': episode_done,
             'label_candidates': label_candidate,
+            'emotion_candidates': self.emotion_labels,
         }
         return action
 
