@@ -552,4 +552,10 @@ class DialogptAgent(TorchGeneratorAgent):
             obs.force_set('text_vec', torch.LongTensor(truncated_vec))
         return obs
 
+    def load_state_dict(self, state_dict):
+        
+        if (state_dict['emo_head.summary.weight'].shape[0] != self.model.emo_head.summary.out_features):
+            state_dict['emo_head.summary.weight'] = self.model.emo_head.summary.weight
+            state_dict['emo_head.summary.bias'] = self.model.emo_head.summary.bias
 
+        super().load_state_dict(state_dict)
