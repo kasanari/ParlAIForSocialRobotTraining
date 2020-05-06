@@ -245,15 +245,10 @@ class DialoGPTModel(TorchGeneratorModel):
         logits = self.output(latent)
         _, preds = logits.max(dim=2)
         return logits, preds
-    
-    def predict(self, hidden_states, token_ids):
-        #token_ids = token_ids.unsqueeze(0)
-        mc_logits = self.mc_head(hidden_states, token_ids).squeeze(-1)
-        return mc_logits
 
-    def predict_emotion(self, hidden_states, token_ids):
-        ec_logits = self.emo_head(hidden_states, token_ids).squeeze(-1)
-        return ec_logits
+    def predict(self, head, hidden_states, token_ids):
+        logits = head(hidden_states, token_ids).squeeze(-1)
+        return logits
 
     def decode_forced_and_predict(self, context, cands, token_ids):
 
@@ -264,15 +259,17 @@ class DialoGPTModel(TorchGeneratorModel):
         attention_mask = model_input != self.NULL_IDX
         latent, _ = self.transformer(input_ids=model_input, attention_mask=attention_mask)
 
-        lm_logits = self.output(latent[:, self.label_inds.item(), ...], label_lengths=self.label_lengths)
-        mc_logits = self.predict(latent, token_ids)
+        true_sentence = latent[:, self.label_inds.item(), ...]
+
+        lm_logits = self.output(true_sentence, label_lengths=self.label_lengths)
+        mc_logits = self.predict(self.mc_head, latent, token_ids)
 
         _, lm_preds = lm_logits.max(dim=2)
         _, mc_preds = mc_logits.max(dim=1)
 
         if self.emotion_prediction:
 
-            ec_logits = self.predict_emotion(latent[:, self.label_inds.item(), ...], token_ids[:, self.label_inds.item()])
+            ec_logits = self.predict(self.emo_head, true_sentence, token_ids[:, self.label_inds.item()])
             _, ec_preds = ec_logits.max(dim=1)
  
             return lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds
@@ -492,7 +489,7 @@ class DialogptAgent(TorchGeneratorAgent):
 
             attention_mask = model_input != self.NULL_IDX
 
-            score, incr_state = model.transformer(input_ids=model_input, past=incr_state)
+            score, incr_state = model.transformer(input_ids=model_input, past=incr_state, attention_mask=attention_mask)
 
             # only need the final hidden state to make the word prediction
             score = score[:, -1:, :]
