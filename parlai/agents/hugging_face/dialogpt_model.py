@@ -53,7 +53,7 @@ class DialoGPTModel(TorchGeneratorModel):
 
         if opt["emotion_prediction"]:
              self.emotion_prediction = True
-             self.config.num_labels = 32
+             self.config.num_labels = opt["emotion_prediction"]
              self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
         else:
             self.emotion_prediction = False

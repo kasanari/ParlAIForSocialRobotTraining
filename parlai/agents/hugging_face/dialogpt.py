@@ -179,9 +179,8 @@ class DialogptAgent(TorchGeneratorAgent):
         )
         agent.add_argument(
             '--emotion-prediction',
-            type='bool',
-            default=False,
-            help='Add emotion prediction training objective.',
+            type=int,
+            help='Add emotion prediction training objective, with number of labels specified.',
         )
         argparser.set_defaults(
             text_truncate=768,
@@ -391,7 +390,8 @@ class DialogptAgent(TorchGeneratorAgent):
                 lm_logits, lm_preds, mc_logits, mc_preds = model_output
 
             if (batch.emotion is not None) and self.opt["emotion_prediction"]:
-                emo_index = torch.tensor(batch.emotion_cands.index(batch.emotion[0])).unsqueeze(0)
+                index = batch.emotion_cands.index(batch.emotion[0])
+                emo_index = torch.tensor(index).unsqueeze(0)
 
                 if self.use_cuda:
                     emo_index = emo_index.cuda()

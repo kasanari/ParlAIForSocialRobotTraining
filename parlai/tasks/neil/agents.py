@@ -34,6 +34,8 @@ class NeilTeacher(FixedDialogTeacher):
         build(opt)
         self._setup_data(base_datatype)
 
+        self.emotion_labels = ["excited", "frustrated", "neutral"]
+
         self.num_exs = sum([len(d) for d in self.data])
         self.num_eps = len(self.data)
         self.reset()
@@ -107,6 +109,7 @@ class NeilTeacher(FixedDialogTeacher):
             'labels': [ep_i[1]],
             'episode_done': episode_done,
             'label_candidates': [ep_i[1], distractor_ep_i[1]],
+            'emotion_candidates' : self.emotion_labels
         }
         return action
 
