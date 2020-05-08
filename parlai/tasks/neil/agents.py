@@ -98,7 +98,7 @@ class NeilTeacher(FixedDialogTeacher):
         ep = self.data[episode_idx]
         ep_i = ep[entry_idx]
         episode_done = entry_idx >= (len(ep) - 1)        
-        
+        random.seed()
         distractor_ep = self.data[random.randrange(self.num_episodes())]
         distractor_ep_i = distractor_ep[0]
         
