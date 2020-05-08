@@ -15,6 +15,8 @@ from parlai.core.metrics import SumMetric, AverageMetric, BleuMetric, FairseqBle
 from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
 from collections import deque
+from collections import defaultdict
+
 
 from .dialogpt_model import DialoGPTModel
 
@@ -179,8 +181,14 @@ class DialogptAgent(TorchGeneratorAgent):
         )
         agent.add_argument(
             '--emotion-prediction',
-            type=int,
+            type=bool,
             help='Add emotion prediction training objective, with number of labels specified.',
+        )
+        agent.add_argument(
+            '--classes-from-file',
+            type=str,
+            default=None,
+            help='loads the list of classes from a file',
         )
         argparser.set_defaults(
             text_truncate=768,
@@ -196,12 +204,27 @@ class DialogptAgent(TorchGeneratorAgent):
             raise RuntimeError(
                 'If using batchsize > 1, --add-special-tokens must be True.'
             )
+
+        if opt["emotion_prediction"] and (opt["classes_from_file"] is None):
+            raise RuntimeError(
+                'If using emotion prediction, specify a class list file with the --classes-from-file argument'
+            )
         super().__init__(opt, shared)
 
         #self.delimiter = opt.get('delimiter', '\n')
         self.delimiter_tok = [self.dict[self.dict.end_token]]
         self._global_end_token = self.dict[self.dict.end_token]
         self.use_cuda = not opt['no_cuda'] and torch.cuda.is_available()
+
+        if opt['classes_from_file'] is not None:
+            with open(opt['classes_from_file']) as f:
+                self.class_list = f.read().splitlines()
+
+        self.dict["class_count"] = len(self.class_list)
+
+        if opt['next_sentence_prediction'] is not None:
+            self.class_list.append("1")
+            self.class_list.append("0")
 
     @staticmethod
     def dictionary_class():
@@ -401,6 +424,9 @@ class DialogptAgent(TorchGeneratorAgent):
                 predicted_emotion = batch.emotion_cands[ec_preds.item()]
                 self.metrics['ec_accuracy'] = self.metrics.get('ec_accuracy') + ExactMatchMetric.compute(predicted_emotion, batch.emotion)
                 self.record_local_metric('ec_accuracy', [self.metrics['ec_accuracy']])
+
+                self._update_confusion_matrix(batch.emotion[0], predicted_emotion)
+
             else:
                 ec_loss = None
 
@@ -411,6 +437,8 @@ class DialogptAgent(TorchGeneratorAgent):
                 candidate = batch.candidates[0][mc_preds.item()]
                 self.metrics['mc_accuracy'] = self.metrics.get('mc_accuracy') + ExactMatchMetric.compute(candidate, batch.labels)
                 self.record_local_metric('mc_accuracy', [self.metrics['mc_accuracy']])
+
+                self._update_confusion_matrix(mc_preds.item(), label_inds.item())
 
         else:
             model_output = self.model(*self._model_input(batch), ys=batch.label_vec)
@@ -559,3 +587,106 @@ class DialogptAgent(TorchGeneratorAgent):
             state_dict['emo_head.summary.bias'] = self.model.emo_head.summary.bias
 
         super().load_state_dict(state_dict)
+
+    def report(self):
+        """
+        Report loss as well as precision, recall, and F1 metrics.
+        """
+        m = super().report()
+        # TODO: upgrade the confusion matrix to newer metrics
+        # get prec/recall metrics
+        confmat = self.metrics['confusion_matrix']
+
+        metrics_list = self.class_list
+
+
+        examples_per_class = []
+        for class_i in metrics_list:
+            class_total = self._report_prec_recall_metrics(confmat, class_i, m)
+            examples_per_class.append(class_total)
+
+        if len(examples_per_class) > 1:
+            # get weighted f1
+            f1 = 0
+            total_exs = sum(examples_per_class)
+            for i in range(len(self.class_list)):
+                f1 += (examples_per_class[i] / total_exs) * m[
+                    'class_{}_f1'.format(self.class_list[i])
+                ]
+            m['weighted_f1'] = f1
+
+            # get weighted accuracy
+            wacc = 0
+            for i in range(len(self.class_list)):
+                wacc += (1.0 / len(self.class_list)) * m[
+                    'class_{}_recall'.format(self.class_list[i])
+                ]
+            m['weighted_acc'] = wacc
+
+        return m
+
+    def _report_prec_recall_metrics(self, confmat, class_name, metrics):
+        """
+        Use the confusion matrix to compute precision and recall.
+
+        :param confmat:
+            the confusion matrics
+        :param str class_name:
+            the class name to compute P/R for
+        :param metrics:
+            metrics dictionary to modify
+        :return:
+            the number of examples of each class.
+        """
+        # TODO: document these parameter types.
+        eps = 0.00001  # prevent divide by zero errors
+        true_positives = confmat[(class_name, class_name)]
+        num_actual_positives = (
+            sum([confmat[(class_name, c)] for c in self.class_list]) + eps
+        )
+        num_predicted_positives = (
+            sum([confmat[(c, class_name)] for c in self.class_list]) + eps
+        )
+
+        recall_str = 'class_{}_recall'.format(class_name)
+        prec_str = 'class_{}_prec'.format(class_name)
+        f1_str = 'class_{}_f1'.format(class_name)
+        accuracy_str = 'class_{}_accuracy'.format(class_name)
+
+        # update metrics dict
+        #metrics[accuracy_str] = true_positives / 
+        metrics[recall_str] = true_positives / num_actual_positives
+        metrics[prec_str] = true_positives / num_predicted_positives
+        metrics[f1_str] = 2 * (
+            (metrics[recall_str] * metrics[prec_str])
+            / (metrics[recall_str] + metrics[prec_str] + eps)
+        )
+
+        return num_actual_positives
+
+    def reset_metrics(self):
+        """
+        Reset metrics.
+        """
+        super().reset_metrics()
+        if not self.metrics.get('confusion_matrix'):
+            self.metrics['confusion_matrix'] = defaultdict(int)
+
+    def _update_confusion_matrix(self, label, prediction):
+        """
+        Update the confusion matrix given the batch and predictions.
+
+        :param batch:
+            a Batch object (defined in torch_agent.py)
+        :param predictions:
+            (list of string of length batchsize) label predicted by the
+            classifier
+        """
+
+        if label is not str:
+            label = str(label)
+
+        if prediction is not str:
+            prediction = str(prediction)
+
+        self.metrics['confusion_matrix'][(label, prediction)] += 1

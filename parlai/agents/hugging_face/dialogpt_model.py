@@ -52,9 +52,14 @@ class DialoGPTModel(TorchGeneratorModel):
             self.next_sentence_prediction = False
 
         if opt["emotion_prediction"]:
-             self.emotion_prediction = True
-             self.config.num_labels = opt["emotion_prediction"]
-             self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
+
+            if opt['classes_from_file'] is not None:
+                with open(opt['classes_from_file']) as f:
+                    self.class_list = f.read().splitlines()
+
+            self.emotion_prediction = True
+            self.config.num_labels = len(self.class_list) #opt["emotion_prediction"]
+            self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
         else:
             self.emotion_prediction = False
 
