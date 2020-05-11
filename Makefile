@@ -4,6 +4,10 @@ VTIM = 14400
 STIM = 1800
 MODEL_PATH = models/$(TASK)/$@/$@
 
+ifeq ($(TASK), empathetic_dialogues_mod)
+	EMOTION_CLASSES_FILE = parlai/tasks/empathetic_dialogues_mod/classes.txt
+endif
+
 MODEL_ARGS = -mf $(MODEL_PATH) -im $(MODEL_PATH) --add-special-tokens True --add-start-token False --gpt2-size $(GPT-SIZE)\
 	--inference topk --topk 10 
 
@@ -20,7 +24,7 @@ dialogpt-mc:
 	python examples/train_model.py $(TRAIN_ARGS) -t $(TASK) -m hugging_face/dialogpt --next_sentence_prediction True
 
 dialogpt-mc-ec:
-	python examples/train_model.py $(TRAIN_ARGS) -t $(TASK) -m hugging_face/dialogpt --next_sentence_prediction True --emotion_prediction True
+	python examples/train_model.py $(TRAIN_ARGS) -t $(TASK) -m hugging_face/dialogpt --next_sentence_prediction True --emotion_prediction True --classes-from-file $(EMOTION_CLASSES_FILE)
 
 gpt2:
 	python examples/train_model.py $(TRAIN_ARGS) -t $(TASK) -m hugging_face/gpt2 --history-add-global-end-token end
