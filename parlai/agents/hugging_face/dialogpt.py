@@ -182,6 +182,7 @@ class DialogptAgent(TorchGeneratorAgent):
         agent.add_argument(
             '--emotion-prediction',
             type=bool,
+            default=False,
             help='Add emotion prediction training objective, with number of labels specified.',
         )
         agent.add_argument(
@@ -216,13 +217,12 @@ class DialogptAgent(TorchGeneratorAgent):
         self._global_end_token = self.dict[self.dict.end_token]
         self.use_cuda = not opt['no_cuda'] and torch.cuda.is_available()
 
+        if opt['emotion_prediction']:
         if opt['classes_from_file'] is not None:
             with open(opt['classes_from_file']) as f:
                 self.class_list = f.read().splitlines()
 
-        self.dict["class_count"] = len(self.class_list)
-
-        if opt['next_sentence_prediction'] is not None:
+        if opt['next_sentence_prediction']:
             self.class_list.append("1")
             self.class_list.append("0")
 
@@ -403,7 +403,7 @@ class DialogptAgent(TorchGeneratorAgent):
         if batch.label_vec is None:
             raise ValueError('Cannot compute loss without a label.')
 
-        if batch.candidate_vecs is not None:
+        if batch.candidate_vecs is not None and self.opt["next_sentence_prediction"]:
             cands, label_inds, mc_token_ids = self.build_candidates(batch)
             model_output = self.model(batch.text_vec, batch.text_lengths, cands, mc_token_ids, ys=(batch.label_vec, label_inds))
 
@@ -593,6 +593,9 @@ class DialogptAgent(TorchGeneratorAgent):
         Report loss as well as precision, recall, and F1 metrics.
         """
         m = super().report()
+        if not self.opt["emotion_prediction"]:
+            return m
+        else:
         # TODO: upgrade the confusion matrix to newer metrics
         # get prec/recall metrics
         confmat = self.metrics['confusion_matrix']
