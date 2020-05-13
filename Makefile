@@ -14,7 +14,7 @@ TRAIN_ARGS = $(MODEL_ARGS) -tblog True -bs 1 -vtim $(VTIM) -stim $(STIM) -vmt to
 							adam -lr 6.25e-5 -vp 5 -veps 1 --load_from_checkpoint True --update-freq 2 \
 							-sval True $(ADDITIONAL_ARGS)
 
-EVAL_ARGS = $(MODEL_ARGS) --save-world-logs True --report-filename eval_results -d True
+EVAL_ARGS = $(MODEL_ARGS) --save-world-logs True --report-filename eval_results -d True -t $(TASK)
 
 ADDITIONAL_ARGS =
 
@@ -33,8 +33,12 @@ dialogpt_mc-ed: TASK = empathetic_dialogues_mod
 dialogpt_mc_ec-ed: TASK = empathetic_dialogues_mod
 dialogpt_mc_ec-ed: EMOTION_CLASSES_FILE = parlai/tasks/empathetic_dialogues_mod/classes.txt
 
-eval:
-	python exampels/eval_model.py $(EVAL_ARGS)
+
+eval/dialogpt%: MODEL = dialogpt
+eval/gpt2%: MODEL = gpt2
+eval/%: MODEL_PATH = models/$(TASK)/$*/$*
+eval/%:
+	python examples/eval_model.py $(EVAL_ARGS)
 
 # ED + Neil
 
