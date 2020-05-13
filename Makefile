@@ -43,17 +43,17 @@ eval/%:
 # ED + Neil
 
 gpt2-ed-neil: gpt2-ed
-	$(TRAIN_MODEL) -im models/empathetic_dialogues/$</$<
+	$(TRAIN_MODEL) -im $</$(<F)
 
 dialogpt-ed-neil: dialogpt-ed
-	$(TRAIN_MODEL) -im models/empathetic_dialogues/$</$<
+	$(TRAIN_MODEL) -im $</$(<F)
 
 dialogpt_mc-ed-neil: dialogpt_mc-ed
-	$(TRAIN_MODEL) -im models/empathetic_dialogues_mod/$</$<
+	$(TRAIN_MODEL) -im $</$(<F)
 
 dialogpt_mc_ec-ed-neil: EMOTION_CLASSES_FILE = parlai/tasks/neil/classes.txt
 dialogpt_mc_ec-ed-neil: dialogpt_mc_ec-ed
-	$(TRAIN_MODEL) -im models/empathetic_dialogues_mod/$</$<
+	$(TRAIN_MODEL) -im -im $</$(<F)
 
 dialogpt_mc_ec-neil: EMOTION_CLASSES_FILE = parlai/tasks/neil/classes.txt
 
