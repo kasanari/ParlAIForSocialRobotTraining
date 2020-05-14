@@ -75,6 +75,8 @@ class DialoGPTModel(TorchGeneratorModel):
         # used to reverse concatenation of context and labels
         self.text_lengths = None
 
+        self.dict = dict
+
         if opt['add_special_tokens']:
             self.transformer.resize_token_embeddings(len(dict.tokenizer))
             self.add_start_token = opt['add_start_token']

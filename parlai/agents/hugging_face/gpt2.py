@@ -107,6 +107,7 @@ class HFGPT2Model(TorchGeneratorModel):
         self.add_start_token = opt['add_special_tokens'] and opt['add_start_token']
         # used to reverse concatenation of context and labels
         self.text_lengths = None
+        self.dict = dict
 
     def _tie_weights(self, output_embeddings, input_embeddings):
         output_embeddings.weight = input_embeddings.weight
