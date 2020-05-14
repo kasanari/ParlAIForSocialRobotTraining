@@ -18,6 +18,7 @@ SPECIAL_TOKENS = {
     "bos_token": "<bos>",
     "eos_token": "<eos>",
     "pad_token": "<pad>",
+    "additional_special_tokens": ["__ctx__"]
 }
 
 NO_OP = "x"
@@ -79,6 +80,7 @@ class Gpt2DictionaryAgent(HuggingFaceDictionaryAgent):
             self.start_token = SPECIAL_TOKENS["bos_token"]
             self.end_token = SPECIAL_TOKENS["eos_token"]
             self.null_token = SPECIAL_TOKENS["pad_token"]
+            self.ctx_token = "__ctx__"
         else:
             # Only special token is end of text
             self.start_token = NO_OP  # hack, we cut off the start token
@@ -92,14 +94,17 @@ class Gpt2DictionaryAgent(HuggingFaceDictionaryAgent):
         self.start_idx = self.tokenizer.convert_tokens_to_ids([self.start_token])[0]
         self.end_idx = self.tokenizer.convert_tokens_to_ids([self.end_token])[0]
         self.null_idx = self.tokenizer.convert_tokens_to_ids([self.null_token])[0]
+        self.ctx_idx = self.tokenizer.convert_tokens_to_ids([self.ctx_token])[0]
         # set tok2ind for special tokens
         self.tok2ind[self.end_token] = self.end_idx
         self.tok2ind[self.start_token] = self.start_idx
         self.tok2ind[self.null_token] = self.null_idx
+        self.tok2ind[self.ctx_token] = self.ctx_idx
         # set ind2tok for special tokens
         self.ind2tok[self.end_idx] = self.end_token
         self.ind2tok[self.start_idx] = self.start_token
         self.ind2tok[self.null_idx] = self.null_token
+        self.ind2tok[self.ctx_idx] = self.ctx_token
 
 class DialogptDictionaryAgent(Gpt2DictionaryAgent):
     def get_tokenizer(self, opt):
@@ -112,3 +117,4 @@ class DialogptDictionaryAgent(Gpt2DictionaryAgent):
         self.start_token = NO_OP 
         self.end_token = "<|endoftext|>"
         self.null_token = SPECIAL_TOKENS["pad_token"]
+        self.ctx_token = "__ctx__"

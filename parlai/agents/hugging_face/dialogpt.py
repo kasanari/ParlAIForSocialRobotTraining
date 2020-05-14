@@ -218,9 +218,9 @@ class DialogptAgent(TorchGeneratorAgent):
         self.use_cuda = not opt['no_cuda'] and torch.cuda.is_available()
 
         if opt['emotion_prediction']:
-        if opt['classes_from_file'] is not None:
-            with open(opt['classes_from_file']) as f:
-                self.class_list = f.read().splitlines()
+            if opt['classes_from_file'] is not None:
+                with open(opt['classes_from_file']) as f:
+                    self.class_list = f.read().splitlines()
 
         if opt['next_sentence_prediction']:
             self.class_list.append("1")
@@ -547,46 +547,15 @@ class DialogptAgent(TorchGeneratorAgent):
         batch = super().batchify(obs_batch, sort)
         batch.emotion = [ex["emotion"] for ex in obs_batch]
         if "emotion_candidates" in obs_batch[0]:
-        batch.emotion_cands = obs_batch[0]["emotion_candidates"]
+            batch.emotion_cands = obs_batch[0]["emotion_candidates"]
         return batch
-
-    def _set_text_vec(self, obs, history, truncate):
-        """
-        Set the 'text_vec' field in the observation.
-
-        Useful to override to change vectorization behavior
-        """
-
-        if 'text' not in obs:
-            return obs
-
-        if 'text_vec' not in obs:
-            # text vec is not precomputed, so we set it using the history
-            history_string = history.get_history_str()
-            # when text not exist, we get text_vec from history string
-            # history could be none if it is an image task and 'text'
-            # filed is be empty. We don't want this
-            if history_string is None:
-                return obs
-            obs['full_text'] = history_string
-            if history_string:
-                history_vec = history.get_history_vec()
-
-            situation = self.dict.txt2vec(obs['situation']) + [self.dict.end_idx]
-            obs['text_vec'] = situation + list(history_vec)
-
-        # check truncation
-        if obs.get('text_vec') is not None:
-            truncated_vec = self._check_truncate(obs['text_vec'], truncate, True)
-            obs.force_set('text_vec', torch.LongTensor(truncated_vec))
-        return obs
 
     def load_state_dict(self, state_dict):
         
         if self.opt["emotion_prediction"]:
-        if (state_dict['emo_head.summary.weight'].shape[0] != self.model.emo_head.summary.out_features):
-            state_dict['emo_head.summary.weight'] = self.model.emo_head.summary.weight
-            state_dict['emo_head.summary.bias'] = self.model.emo_head.summary.bias
+            if (state_dict['emo_head.summary.weight'].shape[0] != self.model.emo_head.summary.out_features):
+                state_dict['emo_head.summary.weight'] = self.model.emo_head.summary.weight
+                state_dict['emo_head.summary.bias'] = self.model.emo_head.summary.bias
 
         super().load_state_dict(state_dict)
 
@@ -598,37 +567,37 @@ class DialogptAgent(TorchGeneratorAgent):
         if not self.opt["emotion_prediction"]:
             return m
         else:
-        # TODO: upgrade the confusion matrix to newer metrics
-        # get prec/recall metrics
-        confmat = self.metrics['confusion_matrix']
+            # TODO: upgrade the confusion matrix to newer metrics
+            # get prec/recall metrics
+            confmat = self.metrics['confusion_matrix']
 
-        metrics_list = self.class_list
+            metrics_list = self.class_list
 
 
-        examples_per_class = []
-        for class_i in metrics_list:
-            class_total = self._report_prec_recall_metrics(confmat, class_i, m)
-            examples_per_class.append(class_total)
+            examples_per_class = []
+            for class_i in metrics_list:
+                class_total = self._report_prec_recall_metrics(confmat, class_i, m)
+                examples_per_class.append(class_total)
 
-        if len(examples_per_class) > 1:
-            # get weighted f1
-            f1 = 0
-            total_exs = sum(examples_per_class)
-            for i in range(len(self.class_list)):
-                f1 += (examples_per_class[i] / total_exs) * m[
-                    'class_{}_f1'.format(self.class_list[i])
-                ]
-            m['weighted_f1'] = f1
+            if len(examples_per_class) > 1:
+                # get weighted f1
+                f1 = 0
+                total_exs = sum(examples_per_class)
+                for i in range(len(self.class_list)):
+                    f1 += (examples_per_class[i] / total_exs) * m[
+                        'class_{}_f1'.format(self.class_list[i])
+                    ]
+                m['weighted_f1'] = f1
 
-            # get weighted accuracy
-            wacc = 0
-            for i in range(len(self.class_list)):
-                wacc += (1.0 / len(self.class_list)) * m[
-                    'class_{}_recall'.format(self.class_list[i])
-                ]
-            m['weighted_acc'] = wacc
+                # get weighted accuracy
+                wacc = 0
+                for i in range(len(self.class_list)):
+                    wacc += (1.0 / len(self.class_list)) * m[
+                        'class_{}_recall'.format(self.class_list[i])
+                    ]
+                m['weighted_acc'] = wacc
 
-        return m
+            return m
 
     def _report_prec_recall_metrics(self, confmat, class_name, metrics):
         """

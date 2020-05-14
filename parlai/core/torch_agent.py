@@ -1302,6 +1302,8 @@ class TorchAgent(ABC, Agent):
         Useful to override to change vectorization behavior
         """
 
+        situation =  self.dict.txt2vec(obs['situation']) + [self.dict.ctx_idx]
+
         if 'text' not in obs:
             return obs
 
@@ -1312,10 +1314,14 @@ class TorchAgent(ABC, Agent):
             # history could be none if it is an image task and 'text'
             # filed is be empty. We don't want this
             if history_string is None:
+                obs['text_vec'] = situation
                 return obs
             obs['full_text'] = history_string
             if history_string:
-                obs['text_vec'] = history.get_history_vec()
+                history_vec = history.get_history_vec()
+
+            
+            obs['text_vec'] = situation + list(history_vec)
 
         # check truncation
         if obs.get('text_vec') is not None:
