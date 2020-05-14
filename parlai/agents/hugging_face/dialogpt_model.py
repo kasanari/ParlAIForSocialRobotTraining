@@ -44,7 +44,6 @@ class DialoGPTModel(TorchGeneratorModel):
             self.config.n_embd, self.config.vocab_size, bias=False
         )
 
-        self.config.summary_activation = "tanh"
         self.config.summary_first_dropout = 0.1
         self.config.summary_proj_to_labels = True
         self.config.summary_type = "cls_index"
@@ -52,6 +51,7 @@ class DialoGPTModel(TorchGeneratorModel):
 
         if opt["next_sentence_prediction"]:
             self.next_sentence_prediction = True
+            self.config.summary_activation = None
             self.config.num_labels = 1
             self.mc_head = SequenceSummary(self.config)  # Multiple choice head
         else:
@@ -62,7 +62,7 @@ class DialoGPTModel(TorchGeneratorModel):
             if opt['classes_from_file'] is not None:
                 with open(opt['classes_from_file']) as f:
                     self.class_list = f.read().splitlines()
-
+            self.config.summary_activation = "tanh"
             self.emotion_prediction = True
             self.config.num_labels = len(self.class_list) #opt["emotion_prediction"]
             self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
