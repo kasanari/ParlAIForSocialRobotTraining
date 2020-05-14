@@ -546,6 +546,7 @@ class DialogptAgent(TorchGeneratorAgent):
         """
         batch = super().batchify(obs_batch, sort)
         batch.emotion = [ex["emotion"] for ex in obs_batch]
+        if "emotion_candidates" in obs_batch[0]:
         batch.emotion_cands = obs_batch[0]["emotion_candidates"]
         return batch
 
@@ -582,6 +583,7 @@ class DialogptAgent(TorchGeneratorAgent):
 
     def load_state_dict(self, state_dict):
         
+        if self.opt["emotion_prediction"]:
         if (state_dict['emo_head.summary.weight'].shape[0] != self.model.emo_head.summary.out_features):
             state_dict['emo_head.summary.weight'] = self.model.emo_head.summary.weight
             state_dict['emo_head.summary.bias'] = self.model.emo_head.summary.bias
