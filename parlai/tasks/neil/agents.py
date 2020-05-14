@@ -70,28 +70,8 @@ class NeilTeacher(FixedDialogTeacher):
 
                 scene_with_direction = " ".join((row["scene"], direction)) # Description of scene combined with "how would the robot responsd ... ?"
 
-                if row['robot_line'] == '' and row['human_line'] == '': 
-                    # Robot makes comment based on situation, 
-                    # input: scene + direction 
-                    # label: utterance
-                    episode.append([scene_with_direction, row["utterance"], row["dominant_affect"], row["scene"]])
-
-                elif row['robot_line'] == '' and row['human_line'] != '': 
-                    # Human says something to robot
-                    # input: scene + direction
-                    # label: utterance
-                    episode.append([scene_with_direction, row["utterance"], row["dominant_affect"], row["scene"]])
-
-                elif row['robot_line'] != '' and row['human_line'] == '': 
-                    # Robot asks something to human
-                    # input: scene + direction
-                    # label: utterance
-                    episode.append([scene_with_direction, row["utterance"], row["dominant_affect"], row["scene"]])
-
-                else: # Conversation between human and robot
-                    episode.append([row["scene"], row["robot_line"], row["dominant_affect"], row["scene"]])
-                    episode.append([row["human_line"], row["utterance"], row["dominant_affect"], row["scene"]])
-
+                episode.append([None, row["utterance"], row["dominant_affect"], scene_with_direction])
+                
                 self.data += [episode]
 
     def get(self, episode_idx, entry_idx=0):
