@@ -4,7 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-
+from typing import Dict, Any, Union, List, Tuple, Optional
 from parlai.core.torch_generator_agent import TorchGeneratorAgent, TorchGeneratorModel, PPLMetric
 from parlai.core.torch_agent import Output, Batch, History
 from parlai.agents.hugging_face.dict import DialogptDictionaryAgent
@@ -552,12 +552,37 @@ class DialogptAgent(TorchGeneratorAgent):
 
     def load_state_dict(self, state_dict):
         
-        if self.opt["emotion_prediction"]:
+        if self.opt["emotion_prediction"] or self.opt["emotion_estimation"]:
             if (state_dict['emo_head.summary.weight'].shape[0] != self.model.emo_head.summary.out_features):
                 state_dict['emo_head.summary.weight'] = self.model.emo_head.summary.weight
                 state_dict['emo_head.summary.bias'] = self.model.emo_head.summary.bias
 
         super().load_state_dict(state_dict)
+
+    def load(self, path: str) -> Dict[str, Any]:
+        """
+        Return opt and model states.
+
+        Override this method for more specific loading.
+        """
+        import parlai.utils.pickle
+
+        states = torch.load(
+            path, map_location=lambda cpu, _: cpu, pickle_module=parlai.utils.pickle
+        )
+
+        if self.opt["emotion_prediction"] or self.opt["emotion_estimation"]:
+            if (states['model']['emo_head.summary.weight'].shape[0] != self.model.emo_head.summary.out_features):
+                states['optimizer'] = None
+
+        if 'model' in states:
+            self.load_state_dict(states['model'])
+        
+        if states['optimizer'] is not None:
+            if 'optimizer' in states and hasattr(self, 'optimizer'):
+                self.optimizer.load_state_dict(states['optimizer'])
+
+        return states
 
     def report(self):
         """
