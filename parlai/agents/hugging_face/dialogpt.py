@@ -179,7 +179,9 @@ class DialogptAgent(TorchGeneratorAgent):
             default=False,
             help='Add next sentence prediction training objective.',
         )
-        agent.add_argument(
+        
+        group = agent.add_mutually_exclusive_group()
+        group.add_argument(
             '--emotion-prediction',
             type=bool,
             default=False,
@@ -190,6 +192,12 @@ class DialogptAgent(TorchGeneratorAgent):
             type=str,
             default=None,
             help='loads the list of classes from a file',
+        )
+        group.add_argument(
+            '--emotion-estimation',
+            type=bool,
+            default=False,
+            help='Add emotion measuring training objective',
         )
         argparser.set_defaults(
             text_truncate=768,
@@ -216,6 +224,8 @@ class DialogptAgent(TorchGeneratorAgent):
         self.delimiter_tok = [self.dict[self.dict.end_token]]
         self._global_end_token = self.dict[self.dict.end_token]
         self.use_cuda = not opt['no_cuda'] and torch.cuda.is_available()
+
+        self.class_list = []
 
         if opt['emotion_prediction']:
             if opt['classes_from_file'] is not None:
@@ -409,9 +419,11 @@ class DialogptAgent(TorchGeneratorAgent):
 
             if self.opt["emotion_prediction"]:
                 lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds = model_output
+            elif self.opt["emotion_estimation"]:
+                lm_logits, lm_preds, mc_logits, mc_preds, ec_logits = model_output
             else:
                 lm_logits, lm_preds, mc_logits, mc_preds = model_output
-
+    
             if (batch.emotion is not None) and self.opt["emotion_prediction"]:
                 index = batch.emotion_cands.index(batch.emotion[0])
                 emo_index = torch.tensor(index).unsqueeze(0)
@@ -426,6 +438,16 @@ class DialogptAgent(TorchGeneratorAgent):
                 self.record_local_metric('ec_accuracy', [self.metrics['ec_accuracy']])
 
                 self._update_confusion_matrix(batch.emotion[0], predicted_emotion)
+            
+            if (batch.emotion is not None) and self.opt["emotion_estimation"]:
+                emo_score = torch.tensor(batch.emotion[0]).unsqueeze(0)
+
+                if self.use_cuda:
+                    emo_score = emo_score.cuda()
+
+                loss_func = torch.nn.MSELoss()
+                ec_loss = loss_func(ec_logits, emo_score)
+                self.record_local_metric("ec_loss", AverageMetric.many([ec_loss]))
 
             else:
                 ec_loss = None

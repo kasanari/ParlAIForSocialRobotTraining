@@ -34,7 +34,7 @@ class NeilTeacher(FixedDialogTeacher):
         build(opt)
         self._setup_data(base_datatype)
 
-        self.emotion_labels = ["excited", "frustrated", "neutral"]
+        self.emotion_labels = ["very excited", "excited", "frustrated", "very frustrated", "neutral"]
 
         self.num_exs = sum([len(d) for d in self.data])
         self.num_eps = len(self.data)
@@ -70,7 +70,7 @@ class NeilTeacher(FixedDialogTeacher):
 
                 scene_with_direction = " ".join((row["scene"], direction)) # Description of scene combined with "how would the robot responsd ... ?"
 
-                episode.append([None, row["utterance"], row["dominant_affect"], scene_with_direction])
+                episode.append([None, row["utterance"], float(row["average_evaluation_rating"]), scene_with_direction])
                 
                 self.data += [episode]
 

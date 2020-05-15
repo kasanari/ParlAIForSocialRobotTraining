@@ -69,6 +69,13 @@ class DialoGPTModel(TorchGeneratorModel):
         else:
             self.emotion_prediction = False
 
+        if opt["emotion_estimation"]:
+            self.emotion_estimation = True
+            self.config.num_labels = 1
+            self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
+        else:
+            self.emotion_estimation = False
+
         self._tie_weights(self.lm_head, self.transformer.wte)
         # add start token
         self.add_start_token = opt['add_special_tokens'] and opt['add_start_token']
@@ -178,14 +185,17 @@ class DialoGPTModel(TorchGeneratorModel):
         _, lm_preds = lm_logits.max(dim=2)
         _, mc_preds = mc_logits.max(dim=1)
 
-        if self.emotion_prediction:
+        output = (lm_logits, lm_preds, mc_logits, mc_preds)
 
+        if self.emotion_prediction or self.emotion_estimation:
             ec_logits = self.predict(self.emo_head, true_sentence, token_ids[:, self.label_inds.item()])
+            output += ec_logits,
+
+        if self.emotion_prediction:
             _, ec_preds = ec_logits.max(dim=1)
- 
-            return lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds
-        else:
-            return lm_logits, lm_preds, mc_logits, mc_preds
+            output += ec_preds,
+
+        return output
 
     def forward(self, *xs, ys=None, prev_enc=None, maxlen=None, bsz=None):
         if len(xs) > 2:
