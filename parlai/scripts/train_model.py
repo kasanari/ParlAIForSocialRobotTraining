@@ -422,7 +422,10 @@ class TrainLoop:
         self.valid_reports.append(v)
         # logging
         if opt['tensorboard_log'] and is_primary_worker():
-            valid_report['total_exs'] = self._total_exs
+            try:
+                valid_report['total_exs'] = self._total_exs
+            except AttributeError:
+                pass
             self.tb_logger.log_metrics('valid', self.parleys, valid_report)
             # flush on a validation
             self.tb_logger.flush()
@@ -634,6 +637,7 @@ class TrainLoop:
         opt = self.opt
         world = self.world
         with world:
+            self.validate()
             while True:
                 # do one example / batch of examples
                 try:
