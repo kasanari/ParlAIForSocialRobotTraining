@@ -438,6 +438,7 @@ class DialogptAgent(TorchGeneratorAgent):
                 self.record_local_metric('ec_accuracy', [self.metrics['ec_accuracy']])
 
                 self._update_confusion_matrix(batch.emotion[0], predicted_emotion)
+                model_output += predicted_emotion,
             
             if (batch.emotion is not None) and self.opt["emotion_estimation"]:
                 emo_score = torch.tensor(batch.emotion[0]).unsqueeze(0)
@@ -448,6 +449,7 @@ class DialogptAgent(TorchGeneratorAgent):
                 loss_func = torch.nn.MSELoss()
                 ec_loss = loss_func(ec_logits, emo_score)
                 self.record_local_metric("ec_loss", AverageMetric.many([ec_loss]))
+                model_output += ec_logits.item(),
 
             else:
                 ec_loss = None
@@ -711,3 +713,67 @@ class DialogptAgent(TorchGeneratorAgent):
             prediction = str(prediction)
 
         self.metrics['confusion_matrix'][(label, prediction)] += 1
+
+
+    def eval_step(self, batch):
+        """
+        Evaluate a single batch of examples.
+        """
+        if batch.text_vec is None and batch.image is None:
+            return
+        if batch.text_vec is not None:
+            bsz = batch.text_vec.size(0)
+        else:
+            bsz = len(batch.image)
+        self.model.eval()
+        cand_scores = None
+        token_losses = None
+
+        if batch.label_vec is not None:
+            # calculate loss on targets with teacher forcing
+            loss, model_output = self.compute_loss(batch, return_output=True)
+            if self.output_token_losses:
+                token_losses = self._construct_token_losses(
+                    batch.label_vec, model_output
+                )
+
+        preds = None
+        if self.skip_generation:
+            warn_once(
+                "--skip-generation does not produce accurate metrics beyond ppl",
+                RuntimeWarning,
+            )
+        else:
+            maxlen = self.label_truncate or 256
+            beam_preds_scores, _ = self._generate(batch, self.beam_size, maxlen)
+            preds, scores = zip(*beam_preds_scores)
+
+        cand_choices = None
+        # TODO: abstract out the scoring here
+        if self.rank_candidates:
+            # compute roughly ppl to rank candidates
+            cand_choices = []
+            encoder_states = self.model.encoder(*self._encoder_input(batch))
+            for i in range(bsz):
+                num_cands = len(batch.candidate_vecs[i])
+                enc = self.model.reorder_encoder_states(encoder_states, [i] * num_cands)
+                cands, _ = self._pad_tensor(batch.candidate_vecs[i])
+                scores, _ = self.model.decode_forced(enc, cands)
+                cand_losses = F.cross_entropy(
+                    scores.view(num_cands * cands.size(1), -1),
+                    cands.view(-1),
+                    reduction='none',
+                ).view(num_cands, cands.size(1))
+                # now cand_losses is cands x seqlen size, but we still need to
+                # check padding and such
+                mask = (cands != self.NULL_IDX).float()
+                cand_scores = (cand_losses * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-9)
+                _, ordering = cand_scores.sort()
+                cand_choices.append([batch.candidates[i][o] for o in ordering])
+
+        text = [self._v2t(p) for p in preds] if preds is not None else None
+        if text and self.compute_tokenized_bleu:
+            # compute additional bleu scores
+            self._compute_fairseq_bleu(batch, preds)
+            self._compute_nltk_bleu(batch, text)
+        return Output(text, cand_choices, token_losses=token_losses, emotion_pred=[model_output[-1]])
