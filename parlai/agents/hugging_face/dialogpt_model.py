@@ -39,6 +39,11 @@ class DialoGPTModel(TorchGeneratorModel):
         # init the model
         self.transformer: GPT2Model = AutoModel.from_pretrained(
             f"microsoft/DialoGPT-{opt['gpt2_size']}")
+
+        self.transformer.config.resid_pdrop =   0.3
+        self.transformer.config.embd_pdrop  =   0.3
+        self.transformer.config.attn_pdrop  =   0.3
+
         self.config = self.transformer.config
         self.lm_head = torch.nn.Linear(
             self.config.n_embd, self.config.vocab_size, bias=False
@@ -48,10 +53,10 @@ class DialoGPTModel(TorchGeneratorModel):
         self.config.summary_proj_to_labels = True
         self.config.summary_type = "cls_index"
         self.config.summary_use_proj = True
+        self.config.summary_activation = None
 
         if opt["next_sentence_prediction"]:
             self.next_sentence_prediction = True
-            self.config.summary_activation = None
             self.config.num_labels = 1
             self.mc_head = SequenceSummary(self.config)  # Multiple choice head
         else:
@@ -62,7 +67,6 @@ class DialoGPTModel(TorchGeneratorModel):
             if opt['classes_from_file'] is not None:
                 with open(opt['classes_from_file']) as f:
                     self.class_list = f.read().splitlines()
-            self.config.summary_activation = "tanh"
             self.emotion_prediction = True
             self.config.num_labels = len(self.class_list) #opt["emotion_prediction"]
             self.emo_head = SequenceSummary(self.config)  # Emotion prediction head
