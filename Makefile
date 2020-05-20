@@ -3,7 +3,7 @@ VPATH = models/empathetic_dialogues:models/empathetic_dialogues_mod:models/neil
 GPT-SIZE = medium
 STIM = 1800
 MODEL_PATH = models/$(TASK)/$@/$@
-VEPS = 1
+VEPS = 0.2
 
 VMT = token_acc
 VMM = max
@@ -29,14 +29,10 @@ gpt2%: MODEL = gpt2
 %-ed: TASK=empathetic_dialogues
 %-neil: TASK=neil
 
-%neil: VEPS = 5
-
-dialogpt-ed gpt2-ed: VEPS = 0.2
-
 dialogpt_mc%: ADDITIONAL_ARGS += --next_sentence_prediction True
 
-dialogpt_mc_ec%: VMT = ec_loss
-dialogpt_mc_ec%: VMM = min
+#dialogpt_mc_ec%: VMT = ec_loss
+#dialogpt_mc_ec%: VMM = min
 
 dialogpt_mc_ec%neil: ADDITIONAL_ARGS += --emotion_estimation True 
 
