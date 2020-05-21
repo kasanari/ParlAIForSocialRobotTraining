@@ -189,17 +189,19 @@ class DialoGPTModel(TorchGeneratorModel):
         _, lm_preds = lm_logits.max(dim=2)
         _, mc_preds = mc_logits.max(dim=1)
 
-        output = (lm_logits, lm_preds, mc_logits, mc_preds)
-
         if self.emotion_prediction or self.emotion_estimation:
+
             ec_logits = self.predict(self.emo_head, true_sentence, token_ids[:, self.label_inds.item()])
-            output += ec_logits,
+        
+            if self.emotion_prediction:
+                _, ec_preds = ec_logits.max(dim=1)
+            else:
+                ec_preds = None
+    
+            return lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds
+        else:
+            return lm_logits, lm_preds, mc_logits, mc_preds
 
-        if self.emotion_prediction:
-            _, ec_preds = ec_logits.max(dim=1)
-            output += ec_preds,
-
-        return output
 
     def forward(self, *xs, ys=None, prev_enc=None, maxlen=None, bsz=None):
         if len(xs) > 2:

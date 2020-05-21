@@ -420,7 +420,7 @@ class DialogptAgent(TorchGeneratorAgent):
             if self.opt["emotion_prediction"]:
                 lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, ec_preds = model_output
             elif self.opt["emotion_estimation"]:
-                lm_logits, lm_preds, mc_logits, mc_preds, ec_logits = model_output
+                lm_logits, lm_preds, mc_logits, mc_preds, ec_logits, _ = model_output
             else:
                 lm_logits, lm_preds, mc_logits, mc_preds = model_output
     
@@ -440,7 +440,7 @@ class DialogptAgent(TorchGeneratorAgent):
                 self._update_confusion_matrix(batch.emotion[0], predicted_emotion)
                 model_output += predicted_emotion,
             
-            if (batch.emotion is not None) and self.opt["emotion_estimation"]:
+            elif (batch.emotion is not None) and self.opt["emotion_estimation"]:
                 emo_score = torch.tensor(batch.emotion[0]).unsqueeze(0)
 
                 if self.use_cuda:
