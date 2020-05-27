@@ -440,7 +440,7 @@ class DialogptAgent(TorchGeneratorAgent):
                 self._update_confusion_matrix(batch.emotion[0], predicted_emotion)
                 model_output += predicted_emotion,
             
-            elif (batch.emotion is not None) and self.opt["emotion_estimation"]:
+            elif (batch.emotion is not None) and self.opt["emotion_estimation"] and batch.emotion is float:
                 emo_score = torch.tensor(batch.emotion[0]).unsqueeze(0)
 
                 if self.use_cuda:
@@ -776,4 +776,8 @@ class DialogptAgent(TorchGeneratorAgent):
             # compute additional bleu scores
             self._compute_fairseq_bleu(batch, preds)
             self._compute_nltk_bleu(batch, text)
-        return Output(text, cand_choices, token_losses=token_losses, emotion_pred=[model_output[-1]])
+
+        if self.opt["emotion_prediction"] or self.opt["emotion_estimation"]:
+            return Output(text, cand_choices, token_losses=token_losses, emotion_pred=[model_output[-1]])
+        else:
+            return Output(text, cand_choices, token_losses=token_losses)
