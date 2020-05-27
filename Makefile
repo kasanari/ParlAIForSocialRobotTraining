@@ -17,7 +17,7 @@ TRAIN_ARGS = $(MODEL_ARGS) -tblog True -bs 1 -stim $(STIM) -vmt $(VMT) -vmm $(VM
 							adam -lr 6.25e-5 -vp 5 -veps $(VEPS) --load_from_checkpoint True --update-freq 128 \
 							-sval True $(ADDITIONAL_ARGS) --skip-generation True 
 
-EVAL_ARGS = $(MODEL_ARGS) --save-world-logs True --skip-generation False --report-filename eval_results -d True -t $(TASK)
+EVAL_ARGS = $(MODEL_ARGS) --save-world-logs True --skip-generation False --report-filename eval_results/$* -d True -t $(TASK)
 
 ADDITIONAL_ARGS =
 
@@ -67,10 +67,13 @@ dialogpt_mc_ec-ed-neil: dialogpt_mc_ec-ed
 # dialogpt_mc_ec-neil: EMOTION_CLASSES_FILE = parlai/tasks/neil/classes.txt
 
 .PHONY: neil
-neil: gpt2-neil dialogpt-neil dialogpt_mc-neil dialogpt_mc_ec-neil
+neil: gpt2-neil dialogpt-neil dialogpt_mc_ec-neil gpt2-ed-neil dialogpt-ed-neil dialogpt_mc_ec-ed-neil
 
 .PHONY: ed
 ed: gpt2-ed dialogpt-ed dialogpt_mc-ed dialogpt_mc_ec-ed
 
+.PHONY: evalneil
+evalneil: eval/gpt2-neil eval/dialogpt-neil eval/dialogpt_mc_ec-neil eval/gpt2-ed-neil eval/dialogpt-ed-neil eval/dialogpt_mc_ec-ed-neil
+	python json_to_csv.py $+
 %: 
 	$(TRAIN_MODEL)
