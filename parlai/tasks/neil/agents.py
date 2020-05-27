@@ -70,7 +70,17 @@ class NeilTeacher(FixedDialogTeacher):
 
                 scene_with_direction = " ".join((row["scene"], direction)) # Description of scene combined with "how would the robot responsd ... ?"
 
-                episode.append([None, row["utterance"], float(row["average_evaluation_rating"]), scene_with_direction])
+                if row.get("average_evaluation_rating"):
+                    rating = float(row["average_evaluation_rating"])
+                else:
+                    rating = 0
+
+                if row.get("utterance"):
+                    utterance = row["utterance"]
+                else:
+                    utterance = ""
+
+                episode.append([None, utterance, rating, scene_with_direction, row["scenario"]])
                 
                 self.data += [episode]
 
@@ -89,7 +99,8 @@ class NeilTeacher(FixedDialogTeacher):
             'labels': [ep_i[1]],
             'episode_done': episode_done,
             'label_candidates': [ep_i[1], distractor_ep_i[1]],
-            'emotion_candidates' : self.emotion_labels
+            'emotion_candidates' : self.emotion_labels,
+            'scenario' : ep_i[4]
         }
         return action
 
