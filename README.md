@@ -1,6 +1,6 @@
 # The main implementation of my thesis work
-This is a forked version of ParlAI which I used for my master thesis. The main change is the addition of a DialoGPT agent, and tasks to train agents on the social robot data.
-
+This is a forked version of ParlAI which I used for my master's thesis. The main change is the addition of a DialoGPT agent, and tasks to train agents on the social robot data.
+For more details on the project, please refer to my master's thesis report.
 ## Example
 
 ### Input:
