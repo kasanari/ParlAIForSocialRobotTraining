@@ -9,5 +9,7 @@ The human and the robot will begin playing the game soon. The robot wants to get
 ### Cherry picked outputs from different decoders, using dialogpt with multitasking trained on both empathetic dialouges and robot data:
 
 Greedy: I like to play games too.
+
 Nucleus: Well I do enjoy those games, do you?
+
 Top-k: i have heard very good things about this game can you tell me more about it
